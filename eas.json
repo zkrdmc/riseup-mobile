@@ -18,9 +18,6 @@
     "preview": {
       "distribution": "internal",
       "channel": "preview",
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.riseupai.co"
-      },
       "android": {
         "buildType": "apk"
       }
@@ -28,9 +25,6 @@
     "production": {
       "channel": "production",
       "autoIncrement": true,
-      "env": {
-        "EXPO_PUBLIC_API_URL": "https://api.riseupai.co"
-      },
       "android": {
         "buildType": "app-bundle"
       }

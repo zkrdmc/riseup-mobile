@@ -95,19 +95,28 @@ for an app bundle.
 
 ### Environment variables, and which Clerk instance goes where
 
-A **development** build takes its `EXPO_PUBLIC_*` values from your local `.env`,
-because the JS is bundled by Metro on your machine. Nothing extra to do.
+**One source of truth per environment.**
 
-A **preview or production** build bundles the JS in the cloud, where your `.env`
-does not exist. `eas.json` sets `EXPO_PUBLIC_API_URL` per profile; the Clerk
-key is set once per EAS environment:
+A **development** build reads your local `.env`, because its JS is bundled by
+Metro on your machine. EAS has no `development` variables and does not need
+any: a dev-client build embeds no JS bundle, so there is nothing for them to
+end up in. The LAN address is per-machine anyway and does not belong on a
+server.
+
+A **preview or production** build bundles in the cloud, where `.env` does not
+exist. Those values live on EAS:
 
 ```bash
-npx eas-cli env:set --name EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY   --value pk_live_... --environment production --visibility plaintext
+npx eas-cli env:list --environment production
+npx eas-cli env:set --name EXPO_PUBLIC_API_URL --value https://api.riseupai.co   --environment production --visibility plaintext
 ```
 
-Skip it and the build **succeeds**, then the app dies on launch —
-`src/lib/config.ts` throws on a missing variable, which on a release build is a
+`eas.json` deliberately carries **no `env` blocks**. A value there silently
+overrides the remote variable of the same name, so keeping any there means two
+places to look and one of them quietly winning.
+
+Miss a variable and the build **succeeds**, then the app dies on launch —
+`src/lib/config.ts` throws on a missing one, which on a release build is a
 white screen. The message names the variable, but only on a device with logs
 attached.
 
@@ -120,7 +129,7 @@ and all three move together:
 | Build | API | Clerk instance | App key | Backend `CLERK_JWKS_URL` |
 | --- | --- | --- | --- | --- |
 | `development` | your LAN | `prompt-moose-74.clerk.accounts.dev` | `pk_test_...` | `https://prompt-moose-74.clerk.accounts.dev/.well-known/jwks.json` |
-| `preview` | `api.riseupai.co` | whatever that deployment verifies against | see below | — |
+| `preview` | `api.riseupai.co` | `clerk.riseupai.co` | `pk_live_...` | `https://clerk.riseupai.co/.well-known/jwks.json` |
 | `production` | `api.riseupai.co` | `clerk.riseupai.co` | `pk_live_...` | `https://clerk.riseupai.co/.well-known/jwks.json` |
 
 Both JWKS endpoints are live and serve one RS256 signing key each, under
@@ -131,15 +140,24 @@ the development instance has a different id on production, while every row in
 `matches`, `player_metrics` and `team_metrics` still carries the old one.
 Moving a club between instances is a data migration, not a config change.
 
-Note that preview and production currently point at the **same** API, and one
-deployment has one `CLERK_JWKS_URL`. So preview cannot sit on the development
-instance while production sits on the live one — the backend would reject one
-of them. Until a staging API exists, a preview build is a production-configured
-internal build, and it touches **real club data**.
+**Preview and production run the same keys on purpose.** Preview is a release
+rehearsal, not a sandbox: the same API, the same Clerk instance, the same data,
+differing only in distribution and package format. Promoting a preview build to
+production changes nothing about what it talks to, so nothing can shift
+underneath it at the moment of release — which is the failure a separate
+pre-production instance invites, where the thing you signed off is not quite
+the thing you shipped.
 
-The fix, when it is worth doing, is a staging deployment of `riseup-backend`
-with `CLERK_JWKS_URL` pointing at the development instance, and
-`EXPO_PUBLIC_API_URL` on the preview profile pointing at that.
+The cost is that a preview APK operates on **real club data**. Uploads started
+from one are real jobs against real quota, and identity assignments from one
+are real edits.
+
+> **Test against a test club, not a test instance.** The safety that a separate
+> Clerk instance would have given comes instead from a dedicated organization on
+> the production instance — an internal club whose matches nobody is coaching
+> from. That keeps the rehearsal faithful, which is the point of this setup,
+> while keeping a real club's season out of reach of a build that has not
+> shipped yet.
 
 ### Before the first production build
 
