@@ -93,6 +93,26 @@ The build profiles live in `eas.json`: `development` for the dev client,
 `preview` for a signed internal APK that runs without Metro, and `production`
 for an app bundle.
 
+### Environment variables on EAS
+
+A **development** build takes its `EXPO_PUBLIC_*` values from your local `.env`,
+because the JS is bundled by Metro on your machine. Nothing extra to do.
+
+A **preview or production** build bundles the JS in the cloud, where your `.env`
+does not exist. `eas.json` sets `EXPO_PUBLIC_API_URL` per profile, but the
+Clerk key is deliberately not in this repo — a wrong one authenticates against
+the wrong tenant, which is worse than a missing one. Set it once per
+environment before the first cloud-bundled build:
+
+```bash
+npx eas-cli env:create --name EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY   --value pk_live_... --environment production --visibility plaintext
+```
+
+If you skip this, the build **succeeds** and the app dies on launch —
+`src/lib/config.ts` throws on a missing variable, which on a release build is a
+white screen. The message names the variable, but you will only see it on a
+device with logs attached.
+
 ### Local builds — needs the native toolchains
 
 ```bash
