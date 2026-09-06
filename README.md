@@ -93,25 +93,62 @@ The build profiles live in `eas.json`: `development` for the dev client,
 `preview` for a signed internal APK that runs without Metro, and `production`
 for an app bundle.
 
-### Environment variables on EAS
+### Environment variables, and which Clerk instance goes where
 
 A **development** build takes its `EXPO_PUBLIC_*` values from your local `.env`,
 because the JS is bundled by Metro on your machine. Nothing extra to do.
 
 A **preview or production** build bundles the JS in the cloud, where your `.env`
-does not exist. `eas.json` sets `EXPO_PUBLIC_API_URL` per profile, but the
-Clerk key is deliberately not in this repo — a wrong one authenticates against
-the wrong tenant, which is worse than a missing one. Set it once per
-environment before the first cloud-bundled build:
+does not exist. `eas.json` sets `EXPO_PUBLIC_API_URL` per profile; the Clerk
+key is set once per EAS environment:
 
 ```bash
-npx eas-cli env:create --name EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY   --value pk_live_... --environment production --visibility plaintext
+npx eas-cli env:set --name EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY   --value pk_live_... --environment production --visibility plaintext
 ```
 
-If you skip this, the build **succeeds** and the app dies on launch —
+Skip it and the build **succeeds**, then the app dies on launch —
 `src/lib/config.ts` throws on a missing variable, which on a release build is a
-white screen. The message names the variable, but you will only see it on a
-device with logs attached.
+white screen. The message names the variable, but only on a device with logs
+attached.
+
+**The app's Clerk key must match the backend's `CLERK_JWKS_URL`.** The backend
+verifies every token's signature against the JWKS of one instance, so a
+`pk_test` token reaching a backend configured for the live instance fails on
+every request. The pairing is app build to API deployment to Clerk instance,
+and all three move together:
+
+| Build | API | Clerk |
+| --- | --- | --- |
+| `development` | your LAN | development (`prompt-moose-74.clerk.accounts.dev`) |
+| `preview` | `api.riseupai.co` | whatever that deployment verifies against |
+| `production` | `api.riseupai.co` | production (`clerk.riseupai.co`) |
+
+Note that preview and production currently point at the **same** API, and one
+deployment has one `CLERK_JWKS_URL`. So preview cannot sit on the development
+instance while production sits on the live one — the backend would reject one
+of them. Until a staging API exists, a preview build is a production-configured
+internal build, and it touches **real club data**.
+
+The fix, when it is worth doing, is a staging deployment of `riseup-backend`
+with `CLERK_JWKS_URL` pointing at the development instance, and
+`EXPO_PUBLIC_API_URL` on the preview profile pointing at that.
+
+### Before the first production build
+
+Two things on the backend, neither of which is in this repo:
+
+**`CLERK_JWKS_URL` must be set on the production deployment** to
+`https://clerk.riseupai.co/.well-known/jwks.json`. It was absent from the
+pulled Vercel production env at the time of writing; if it really is unset,
+`clerk_auth.py` raises on every authenticated request and the API returns 500
+for everything. Check with `vercel env ls`.
+
+**`CLERK_AUTHORIZED_PARTIES` has no entry for the app.** It defaults to three
+web origins (`core/config.py`), and the backend rejects a token whose `azp`
+claim is not among them. Mobile tokens pass today only because Clerk's native
+SDKs generally omit `azp` and the check allows a missing claim. If sign-in
+returns `401 "Token was not issued for this application."`, that is this — read
+the rejected `azp` out of the server log and add it to the list.
 
 ### Local builds — needs the native toolchains
 
