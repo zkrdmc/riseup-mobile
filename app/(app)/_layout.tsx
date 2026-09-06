@@ -23,6 +23,15 @@ export default function AppLayout() {
       <Stack.Screen name="(tabs)" />
       <Stack.Screen name="match/[id]" />
       <Stack.Screen
+        name="survey/index"
+        options={{
+          // A full screen, not a modal. The operator moves between its steps
+          // while walking around a pitch, and a sheet that can be swiped away
+          // mid-survey is the wrong affordance outdoors.
+          headerShown: false,
+        }}
+      />
+      <Stack.Screen
         name="match/player"
         options={{
           // A player is a detail of the match already on screen, not a new

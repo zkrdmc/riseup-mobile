@@ -50,7 +50,21 @@ export default function CaptureScreen() {
       </Body>
 
       <Spacer size={space[5]} />
-      <Button label="Upload footage instead" onPress={() => router.push('/uploads')} block />
+      <Button label="Survey the rig" onPress={() => router.push('/survey')} block />
+      <Spacer size={space[3]} />
+      <Body tone={3} size={13}>
+        The measurements can be taken now, before the cameras work. They are the same either way,
+        they take twenty minutes the first time at a ground, and doing them once means the pitch
+        never has to be measured again.
+      </Body>
+
+      <Spacer size={space[4]} />
+      <Button
+        label="Upload footage instead"
+        onPress={() => router.push('/uploads')}
+        variant="secondary"
+        block
+      />
 
       <Spacer size={space[6]} />
       <Panel>

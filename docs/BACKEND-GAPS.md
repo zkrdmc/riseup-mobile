@@ -195,3 +195,53 @@ The inbox is a local mirror. A phone that was off for a week has no record of
 what it missed, and a reinstall starts empty. §6's "matching in-app inbox" is
 only fully true with a server-side list — `GET /me/notifications`, cursor
 paginated, with read state.
+
+---
+
+## 12. The rig survey has to travel with the session
+
+PRD §8.2 has `POST /capture/sessions` carrying "per-device homography from the
+framing step, capture settings". That is not enough. The survey the app now
+collects (`src/capture/survey/schema.ts`) is a larger document, and every part
+of it is needed at ingest:
+
+- **Intrinsics and their provenance.** `reported` (a device calibration),
+  `geometric` (derived from focal length and sensor size), or `unknown`. The
+  solver should weight a calibrated matrix differently from a 1%-accurate
+  estimate, and it cannot do that if the payload only carries numbers.
+- **Distortion**, in one of two models — Brown-Conrady coefficients on Android,
+  a lookup table on iOS. Consumers must branch on `model`, not assume.
+- **Which controlled settings actually applied.** A session where a phone
+  refused to disable stabilisation is still processable, but the fixed-camera
+  assumption does not hold and ingest needs to know that rather than infer it
+  from a drifting solve.
+- **Real frame timing** — measured fps, jitter, rolling-shutter skew, and the
+  timestamp source. Speed metrics are wrong by the ratio between requested and
+  delivered frame rate, and rolling shutter is a systematic bias in sprint
+  speed, not noise.
+- **Tilt and roll from the IMU**, which is an independent prior on two of the
+  three rotation parameters and the cheapest available check on a bad solve.
+- **The measured baseline**, which is what the app cross-checks the two camera
+  positions against and what governs handover quality across the seam.
+- **All four pitch sides plus a diagonal.** Municipal pitches are not
+  rectangles; fitting positions to an assumed rectangle puts a systematic error
+  into everything.
+
+The record is versioned (`schemaVersion`) because sessions filmed this season
+get re-processed by next season's pipeline, and it must be able to tell which
+fields it can trust.
+
+**Two endpoints, then:**
+
+```
+POST /api/v1/capture/sessions          # accepts `survey` alongside the rest
+GET  /api/v1/venues/{id}/survey        # last survey for a venue
+PUT  /api/v1/venues/{id}/survey        # pitch dimensions + markings, reusable
+```
+
+The venue split matters for the operator, not the model: pitch dimensions and
+marking condition are per-ground and do not change between matches. Re-entering
+them every Saturday is how a survey stops being done properly.
+
+Also worth adding to `GET /venues/pitches`, which today returns
+`length_m`/`width_m` only — a shape the four-sided survey cannot round-trip.
