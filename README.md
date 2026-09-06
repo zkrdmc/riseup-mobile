@@ -117,11 +117,19 @@ verifies every token's signature against the JWKS of one instance, so a
 every request. The pairing is app build to API deployment to Clerk instance,
 and all three move together:
 
-| Build | API | Clerk |
-| --- | --- | --- |
-| `development` | your LAN | development (`prompt-moose-74.clerk.accounts.dev`) |
-| `preview` | `api.riseupai.co` | whatever that deployment verifies against |
-| `production` | `api.riseupai.co` | production (`clerk.riseupai.co`) |
+| Build | API | Clerk instance | App key | Backend `CLERK_JWKS_URL` |
+| --- | --- | --- | --- | --- |
+| `development` | your LAN | `prompt-moose-74.clerk.accounts.dev` | `pk_test_...` | `https://prompt-moose-74.clerk.accounts.dev/.well-known/jwks.json` |
+| `preview` | `api.riseupai.co` | whatever that deployment verifies against | see below | — |
+| `production` | `api.riseupai.co` | `clerk.riseupai.co` | `pk_live_...` | `https://clerk.riseupai.co/.well-known/jwks.json` |
+
+Both JWKS endpoints are live and serve one RS256 signing key each, under
+distinct instance ids (`ins_3AgU5S9...` for development, `ins_3Bp2g4s...` for
+production). Distinct instances mean **distinct user and organization
+databases**, and `club_id` is the Clerk organization id — so a club created on
+the development instance has a different id on production, while every row in
+`matches`, `player_metrics` and `team_metrics` still carries the old one.
+Moving a club between instances is a data migration, not a config change.
 
 Note that preview and production currently point at the **same** API, and one
 deployment has one `CLERK_JWKS_URL`. So preview cannot sit on the development
@@ -138,10 +146,10 @@ with `CLERK_JWKS_URL` pointing at the development instance, and
 Two things on the backend, neither of which is in this repo:
 
 **`CLERK_JWKS_URL` must be set on the production deployment** to
-`https://clerk.riseupai.co/.well-known/jwks.json`. It was absent from the
-pulled Vercel production env at the time of writing; if it really is unset,
-`clerk_auth.py` raises on every authenticated request and the API returns 500
-for everything. Check with `vercel env ls`.
+`https://clerk.riseupai.co/.well-known/jwks.json` — verified live, one RS256
+key. It was absent from the pulled Vercel production env at the time of
+writing; if it really is unset, `clerk_auth.py` raises on every authenticated
+request and the API returns 500 for everything. Check with `vercel env ls`.
 
 **`CLERK_AUTHORIZED_PARTIES` has no entry for the app.** It defaults to three
 web origins (`core/config.py`), and the backend rejects a token whose `azp`
