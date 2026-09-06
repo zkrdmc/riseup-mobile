@@ -1,0 +1,74 @@
+{
+  "expo": {
+    "name": "RiseUp",
+    "slug": "riseup-mobile",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "riseup",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0c0d",
+    "newArchEnabled": true,
+    "ios": {
+      "bundleIdentifier": "co.riseupai.mobile",
+      "supportsTablet": false,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSPhotoLibraryUsageDescription": "RiseUp needs access to your photos to upload match footage and clips for analysis.",
+        "NSCameraUsageDescription": "RiseUp uses the camera to film matches for analysis.",
+        "NSMicrophoneUsageDescription": "RiseUp records audio alongside video. The audio carries the sync marker that aligns the two cameras in a rig."
+      }
+    },
+    "android": {
+      "package": "co.riseupai.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0c0d",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false,
+      "edgeToEdgeEnabled": true
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      "expo-web-browser",
+      "expo-image",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0c0d",
+          "image": "./assets/splash-icon.png",
+          "imageWidth": 160
+        }
+      ],
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./node_modules/@expo-google-fonts/archivo/600SemiBold/Archivo_600SemiBold.ttf",
+            "./node_modules/@expo-google-fonts/dm-sans/400Regular/DMSans_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/dm-sans/500Medium/DMSans_500Medium.ttf",
+            "./node_modules/@expo-google-fonts/dm-mono/400Regular/DMMono_400Regular.ttf",
+            "./node_modules/@expo-google-fonts/dm-mono/500Medium/DMMono_500Medium.ttf"
+          ]
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "RiseUp needs access to your photos to upload match footage and clips for analysis."
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#35c98d"
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
