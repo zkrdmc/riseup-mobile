@@ -150,7 +150,60 @@ each other") and should be surfaced close to verbatim.
 - Below ~20 m back the overlap band collapses and identity handover fails.
     
 
-### 4.3 Preflight
+### 4.3 Lens survey — once per camera, not once per match
+
+Everything the pipeline does downstream assumes a rectilinear camera, and a
+homography cannot represent lens distortion (main PRD 3.0.9). So every camera
+needs a lens model before its footage is worth anything at the frame edges —
+which is exactly where the far corners of the pitch land.
+
+**On a phone, this is free.** iOS reports `AVCameraCalibrationData` and Android
+reports `LENS_DISTORTION` with `LENS_INTRINSIC_CALIBRATION`; the app records
+them and there is no user-facing step at all. Note that iOS gives a radial
+magnification **lookup table**, not polynomial coefficients, and that Android's
+coefficient order is not OpenCV's.
+
+**On anything else, the app has to solve it.** A borrowed camcorder, an action
+camera, or the club's existing fixed camera reports nothing. The survey flow:
+
+1. Print the chessboard (the app offers a PDF, sized for A4 and for A3).
+    
+2. The app guides the operator through 12–20 photographs.
+    
+3. It solves intrinsics and distortion on device and stores the result against
+   that camera, with its resolution and zoom setting.
+    
+4. It reports the reprojection error and how far a straight line at the frame
+   edge actually bows, in pixels — so the operator sees whether the camera
+   needed correcting at all.
+    
+
+**The guidance is the entire value of this screen.** The natural way to
+photograph a calibration board produces a useless calibration: careful, well-lit,
+head-on shots constrain focal length beautifully and distortion barely at all,
+and yield a confident model that corrects nothing. The app must actively push
+the operator to:
+
+- **Tilt the board steeply**, 30–45°, in several directions.
+    
+- **Put the board in each corner of the frame.** The centre of a lens is very
+  nearly rectilinear; the corners are the whole problem.
+    
+- Keep the board **flat** — a curled printout is indistinguishable from lens
+  distortion and gets baked into every match.
+    
+- Shoot at the **resolution and zoom the match will be filmed at.**
+    
+
+A live overlay showing which regions of the frame have been covered is the
+right interface: it turns an abstract instruction into a checklist the operator
+can finish.
+
+**Requirement:** recording is blocked without a lens model for every camera in
+the rig, or an explicit acknowledgement that the footage will be treated as
+rectilinear and the job marked accordingly.
+
+### 4.4 Preflight
 
 All blocking, all checkable offline:
 
@@ -160,10 +213,11 @@ All blocking, all checkable offline:
 | Power | External power, or battery > 90% | Sustained 4K recording exceeds battery for 105 minutes |
 | Thermal | State nominal | A device already warm will throttle and drop frames |
 | Locks | AE/AWB/focus locked on both | Cannot be retrofitted after the fact |
+| Lens model | present for every camera | Distortion cannot be recovered later (4.3) |
 | Framing | No blocking issues | §4.2 |
 | Pairing | Both devices present, roles assigned | §4.1 |
 
-### 4.4 Recording
+### 4.5 Recording
 
 - **Into the app's own container, never the system camera roll.** The app then
   owns codec, bitrate and frame-rate stability; it can write a sidecar carrying
@@ -184,7 +238,7 @@ All blocking, all checkable offline:
   sync corrects anyway.
     
 
-### 4.5 In-match health
+### 4.6 In-match health
 
 A persistent, glanceable state on both devices, and an alert on A if B is in
 trouble:
