@@ -8,7 +8,9 @@ screen is unfinished, because several of them are finished and waiting.
 
 ---
 
-## What is built: v0.1
+## What is built
+
+### v0.1 — the plumbing
 
 The phasing in PRD §10 puts auth, clip upload, match list, summary and push
 before any camera work, because that is the fastest route to a coach holding
@@ -16,16 +18,41 @@ something real and every later phase depends on the plumbing it builds.
 
 | | |
 | --- | --- |
-| **Auth** | Clerk, the same instance as the dashboard. A coach's existing account works with no migration |
+| **Auth** | Clerk, the same instance as the dashboard. A coach's existing account works with no migration. Gated on club membership — an orphan account is refused at the door rather than 403ing on every request afterwards |
 | **Match list** | Finished matches merged with in-flight upload jobs, so an upload from ten seconds ago is visible |
 | **Match summary** | Data-quality banner, team totals, top five by distance and by sprints |
 | **Player quick view** | Four metrics, own-season comparison, heatmap |
 | **Uploads** | Clip picking, background transfer, persisted queue, honest time estimate |
 | **Push** | Registration, delivery, in-app inbox, deep links — waiting on `POST /me/devices` |
 | **Role switch** | Analyst opens on the match list, Operator on capture (§2) |
+| **Language** | English, French, Arabic. Chosen in settings, stored on the account, so the phone and the dashboard agree |
 
-**Capture is deliberately not built.** The tab exists and says so. A screen
-that looks like it films and does not is the one failure §4 exists to prevent.
+### Since v0.1 — the rig, before it films
+
+The camera work landed setup-first, and that ordering is the point: everything
+below decides whether footage will be *solvable*, and every one of those
+decisions has to be made while the tripod is still in someone's hands.
+
+| | |
+| --- | --- |
+| **Rig survey** | One document per session describing what processing cannot recover from the footage. Every value is tagged measured, reported or estimated — a consumer that cannot tell those apart will eventually average them |
+| **Lens survey** | For cameras that do not report their own intrinsics (PRD §4.3), fitted from straight lines |
+| **Camera library** | A picker limited to cameras the pipeline can actually process, with a readiness and calibration summary per device |
+| **Visibility gate** | Live: a detector reports which pitch landmarks it can see, and the gate decides whether that is enough to solve from — while the answer can still be changed by moving the tripod |
+| **Pair gate** | Judges the RIG, not each camera. One camera seeing only its own goal area is unsolvable alone and fine when the other shares six landmarks; two cameras can each look excellent and share nothing, and that rig is useless |
+| **`modules/riseup-vision`** | A local Expo native module wrapping OpenCV `calib3d`, for the undistort solve. Swift/ObjC++ on iOS, Gradle on Android |
+
+**Recording is still not built**, and the capture tab says so in one line rather
+than advertising it. The screen does a real job today — survey and camera
+library — because a tab that only announces future features fails Apple's
+minimum-functionality bar (App Review 2.1 / 4.2) and reads to Google as
+broken. Both are right.
+
+**The lens coefficient order is normalised on OpenCV's.** Android hands
+distortion over as `[k1,k2,k3,p1,p2]` and OpenCV expects `[k1,k2,p1,p2,k3]` —
+tangential in the middle rather than at the end. Passing one to the other puts
+`k3` in `p1`'s slot, which is a bug that produces plausible-looking output. See
+`src/capture/survey/opencv.ts`.
 
 ---
 
@@ -220,7 +247,13 @@ device.
 ```bash
 npx expo install --check   # the tool that actually keeps versions correct
 npm run typecheck          # tsc --noEmit
+npm run smoke              # the survey and framing maths, and the dictionaries
 ```
+
+`npm run smoke` compiles the capture modules on their own and runs them under
+plain Node — no Metro, no device, no React. The geometry it covers is a port of
+`camera/rig.py` in `riseup-ml` and the thresholds are product decisions, so it
+is the one part of this app that must not drift silently from the server.
 
 ---
 
@@ -241,7 +274,24 @@ src/
   lib/                     formatting and the derivations screens need
   upload/                  the persisted upload queue
   notifications/           push registration, the inbox, the category contract
+  i18n/                    dictionaries, plural rules, the locale store
+  capture/
+    survey/                the rig record, the lens model, EXIF, validation
+    framing/               landmarks, per-view visibility, the pair gate
+    devices/               camera catalogue, readiness, persistence
+    sensors/               device orientation, the location disclosure
+    native/                the seam to modules/riseup-vision
+
+modules/
+  riseup-vision/           local Expo native module: OpenCV calib3d
 ```
+
+**A new native module means a new build.** A development client compiled before
+`riseup-vision` existed does not contain it, and the failure is not a build
+error — it is a runtime one, on the device, in the undistort path. The module
+degrades rather than crashing a build that lacks `calib3d`, so the tell is a
+survey that silently refuses to solve. Rebuild with `eas-cli build` after
+pulling any change under `modules/`.
 
 Two rules that keep it that way:
 
@@ -277,8 +327,12 @@ Per PRD §10, and in this order:
 
 - **v0.2** — single-phone capture into the app's own container, resumable
   upload, verified deletion. Blocked on multipart upload (gap 6).
-- **v0.3** — the two-phone rig. Pairing over Bluetooth/local network, the
-  framing assistant, preflight, the audible sync marker, in-match health.
+- **v0.3** — the two-phone rig. **The framing half has landed early**: the
+  survey, the lens model, the visibility gate and the pair gate are in and
+  smoke-tested, because they are what decides whether footage can be solved and
+  they had to exist before there was any point recording. What remains is
+  pairing over Bluetooth/local network, preflight, the audible sync marker and
+  in-match health.
 - **v0.4** — data-quality surfacing, auto-directed video, lineup assignment.
 
 The framing assistant's geometry is a **port** of `camera/rig.py` in
