@@ -14,6 +14,7 @@ const validate = require('../../../../.smoke/survey/validate');
 const landmarks = require('../../../../.smoke/framing/landmarks');
 const visibility = require('../../../../.smoke/framing/visibility');
 const detector = require('../../../../.smoke/framing/detector');
+const pair = require('../../../../.smoke/framing/pair');
 
 let pass = 0;
 let fail = 0;
@@ -426,6 +427,93 @@ console.log('14. Detection filtering');
   check('a missing detector reports unavailable, not pass', detector.detectorUnavailable().available === false);
   check('and none is registered by default', detector.isDetectorAvailable() === false);
 }
+
+console.log('');
+console.log('15. Region-of-interest coverage');
+{
+  const all = landmarks.pitchLandmarks(105, 68);
+  const pick = (ids) => all.filter((m) => ids.includes(m.id));
+  const pitch = visibility.wholePitch(105, 68);
+  // The case hull area cannot see: landmarks at BOTH ends, nothing in the
+  // middle. Large hull, well conditioned, and blind where play happens.
+  const barbell = pick(['corner_nw','corner_sw','west_pen_north','west_pen_south','corner_ne','corner_se','east_pen_north','east_pen_south']);
+  const bar = visibility.assessVisibility(barbell, pitch);
+  check('a barbell layout has a large hull', bar.spreadM2 > 4000, bar.spreadM2.toFixed(0) + ' m2');
+  check('and is well conditioned', bar.conditioning > 0.3, bar.conditioning.toFixed(2));
+  check('so extent checks alone would pass it', !bar.issues.some((i) => i.code === 'LANDMARKS_CLUSTERED' || i.code === 'LANDMARKS_COLLINEAR'));
+  check('but coverage catches the empty middle', !bar.ok, 'worst gap ' + bar.worstGapM.toFixed(0) + ' m');
+  check('and names it', bar.issues.some((i) => i.code === 'COVERAGE_GAP'));
+  // Same points plus the centre circle: the hole is filled.
+  const filled = visibility.assessVisibility(pick(barbell.map((m) => m.id).concat(['centre_mark','circle_north','circle_south','halfway_north','halfway_south'])), pitch);
+  check('adding the centre closes the gap', filled.worstGapM < bar.worstGapM, filled.worstGapM.toFixed(0) + ' m vs ' + bar.worstGapM.toFixed(0) + ' m');
+  check('and it passes', filled.ok);
+  check('hull coverage is a fraction', filled.hullCoverage > 0.5 && filled.hullCoverage <= 1, filled.hullCoverage.toFixed(2));
+  const west = visibility.halfWithOverlap(105, 68, 'west');
+  check('a west ROI stops short of the east end', west.maxX < 105 && west.minX === 0, west.minX + '..' + west.maxX);
+}
+
+console.log('');
+console.log('16. The pair gate');
+{
+  const all = landmarks.pitchLandmarks(105, 68);
+  const pick = (ids) => all.filter((m) => ids.includes(m.id));
+  const ids = (ms) => ms.map((m) => m.id);
+  const roiA = visibility.halfWithOverlap(105, 68, 'west');
+  const roiB = visibility.halfWithOverlap(105, 68, 'east');
+  const base = { roiA, roiB, pitchLengthM: 105, pitchWidthM: 68 };
+
+  const westSide = ['corner_nw','corner_sw','west_pen_north','west_pen_south','west_pen_gl_north','west_pen_gl_south','west_penalty_spot','west_goal_north','west_goal_south'];
+  const eastSide = ['corner_ne','corner_se','east_pen_north','east_pen_south','east_pen_gl_north','east_pen_gl_south','east_penalty_spot','east_goal_north','east_goal_south'];
+
+  // THE DANGEROUS CASE. Each camera covers its own half properly and they
+  // share nothing: A takes the north halfway point, B the south one. Both
+  // pass individually; the rig cannot work.
+  const disjointA = pick(westSide.concat(['halfway_north','circle_north']));
+  const disjointB = pick(eastSide.concat(['halfway_south','circle_south']));
+  const disjoint = pair.assessPair(Object.assign({ a: disjointA, b: disjointB }, base));
+  const perCameraCodes = disjoint.perCamera.A.issues.concat(disjoint.perCamera.B.issues).map((i) => i.code);
+  check('no per-camera check can see a missing overlap',
+    !perCameraCodes.some((c) => c.startsWith('PAIR_')), perCameraCodes.join('/') || 'none');
+  check('but the pair is refused', !disjoint.ok, 'shared=' + disjoint.sharedCount);
+  check('and names the missing overlap', disjoint.issues.some((i) => i.code === 'PAIR_NO_COMMON_GROUND'));
+
+  // Sharing ONLY the halfway line is collinear, and genuinely not enough:
+  // points on a line cannot fix how two views relate, however many there are.
+  const halfwayOnly = ['halfway_north','halfway_south','centre_mark','circle_north','circle_south'];
+  const lineA = pick(westSide.concat(halfwayOnly));
+  const lineB = pick(eastSide.concat(halfwayOnly));
+  const lineOnly = pair.assessPair(Object.assign({ a: lineA, b: lineB }, base));
+  check('sharing only the halfway line is refused', !lineOnly.ok,
+    'shared=' + lineOnly.sharedCount + ' cond=' + lineOnly.sharedConditioning.toFixed(3));
+  check('and named as collinear overlap', lineOnly.issues.some((i) => i.code === 'PAIR_OVERLAP_COLLINEAR'));
+  check('the diameter is measured across the width, not along the length',
+    lineOnly.sharedSpreadM > 60, lineOnly.sharedSpreadM.toFixed(0) + ' m');
+
+  // A healthy rig: the overlap reaches off the halfway line, so both cameras
+  // also see a penalty box.
+  const wide = halfwayOnly.concat(['west_pen_north','west_pen_south']);
+  const goodA = pick(westSide.concat(wide));
+  const goodB = pick(eastSide.concat(wide));
+  const good = pair.assessPair(Object.assign({ a: goodA, b: goodB }, base));
+  check('an overlap reaching off the line passes', good.ok,
+    'shared=' + good.sharedCount + ' spread=' + good.sharedSpreadM.toFixed(0) + ' m cond=' + good.sharedConditioning.toFixed(2));
+  check('the union covers the pitch', good.combined.ok, 'gap ' + good.combined.worstGapM.toFixed(0) + ' m');
+
+  // A view that fails ALONE and is carried by the pair.
+  const weakA = pick(['halfway_north','halfway_south','centre_mark','west_pen_north','west_pen_south']);
+  const carried = pair.assessPair(Object.assign({ a: weakA, b: goodB }, base));
+  check('the weak camera fails on its own', !carried.perCamera.A.ok,
+    carried.perCamera.A.issues.map((i) => i.code).join('/'));
+  check('but the pair carries it', carried.ok,
+    'compensated: ' + carried.compensated.map((c) => c.role + ':' + c.code).join(','));
+  check('and says which failures were carried', carried.compensated.length > 0);
+
+  // Seeing nothing is never carried: there is no shared geometry to relate it by.
+  const blind = pair.assessPair(Object.assign({ a: [], b: goodB }, base));
+  check('a blind camera is never carried', !blind.ok);
+  check('and is reported, not silently compensated', blind.compensated.length === 0);
+}
+
 
 console.log(`\n${'='.repeat(60)}`);
 console.log(`  ${pass} passed, ${fail} failed`);
