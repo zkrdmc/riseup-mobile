@@ -58,3 +58,8 @@ yarn-error.*
 modules/*/android/.gradle/
 modules/*/android/build/
 modules/*/android/.cxx/
+
+# IDE state. Android Studio wrote this when the native module appeared.
+.idea/
+*.iml
+.vscode/
