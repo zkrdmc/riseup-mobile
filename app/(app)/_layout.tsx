@@ -8,18 +8,17 @@
  * once. That reads as a broken app, rather than as one action somebody else
  * needs to take.
  *
- * `GET /me` is the gate: the cheapest call in the API, needed by several
- * screens anyway, and cached by React Query — so after the first render the
- * check costs nothing.
+ * WHY THE WORK IS SPLIT ACROSS TWO COMPONENTS. Clerk's organisation hooks warn
+ * — and return nothing useful — when there is no session:
  *
- * WHY HERE AND NOT IN THE SIGN-IN HANDLER. Membership can be revoked while
- * somebody is using the app, and a session restored from the keychain days
- * later never passes through sign-in at all. Gating the layout catches both.
+ *   "useOrganizationList requires an active user session."
  *
- * Tabs at the root, everything else pushed over them. `headerShown` is off
- * throughout: each screen draws its own header, because the summary screen's
- * carries a data-quality banner and a status pill that no native title bar can
- * hold.
+ * This layout mounts before the root redirect to sign-in has run, so calling
+ * those hooks unconditionally fires that warning on every cold start of a
+ * signed-out app. Hooks cannot be called conditionally, so the guard has to be
+ * a component boundary: `AppLayout` knows only whether there is a session, and
+ * `SignedInLayout` — which is the only thing that touches organisations — is
+ * not mounted until there is one.
  */
 
 import { useAuth } from '@clerk/clerk-expo';
@@ -37,6 +36,19 @@ import { ChooseClub, NoClub } from '../../src/ui/NoClub';
 import { LoadingState } from '../../src/ui/State';
 
 export default function AppLayout() {
+  const { isLoaded, isSignedIn } = useAuth();
+
+  // Nothing below here may run without a session. The root layout is
+  // redirecting to sign-in; rendering the bare stack in the meantime avoids
+  // both the Clerk warning and a flash of the loading state.
+  if (!isLoaded || !isSignedIn) {
+    return <AppStack />;
+  }
+
+  return <SignedInLayout />;
+}
+
+function SignedInLayout() {
   const me = useMe();
   const api = useApi();
   const { signOut } = useAuth();
@@ -84,6 +96,10 @@ export default function AppLayout() {
     );
   }
 
+  return <AppStack />;
+}
+
+function AppStack() {
   return (
     <Stack
       screenOptions={{
