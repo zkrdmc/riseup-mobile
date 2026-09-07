@@ -29,16 +29,18 @@ import { useCallback } from 'react';
 import { isNoClubError } from '../../src/api/errors';
 import { useApi } from '../../src/api/provider';
 import { useMe } from '../../src/api/queries';
+import { useOrganisation } from '../../src/auth/organisation';
 import { inbox } from '../../src/notifications/inbox';
 import { ink, surface } from '../../src/theme/tokens';
 import { Screen } from '../../src/ui/Layout';
-import { NoClub } from '../../src/ui/NoClub';
+import { ChooseClub, NoClub } from '../../src/ui/NoClub';
 import { LoadingState } from '../../src/ui/State';
 
 export default function AppLayout() {
   const me = useMe();
   const api = useApi();
   const { signOut } = useAuth();
+  const { state: org, activate } = useOrganisation();
 
   const onSignOut = useCallback(() => {
     void (async () => {
@@ -48,7 +50,25 @@ export default function AppLayout() {
     })();
   }, [api, signOut]);
 
-  if (isNoClubError(me.error)) {
+  // Resolve the organisation BEFORE trusting a 403 from /me. Clerk does not
+  // activate an organisation on sign-in, so a legitimate member can hold a
+  // session carrying no org_id — and the backend answers that with the same
+  // 403 it uses for a genuine orphan. Activating first is what keeps the gate
+  // from firing on somebody who is correctly invited and has done nothing
+  // wrong.
+  if (org.status === 'loading' || org.status === 'activating') {
+    return (
+      <Screen edges={['top', 'bottom']}>
+        <LoadingState label="Finding your club" />
+      </Screen>
+    );
+  }
+
+  if (org.status === 'choose') {
+    return <ChooseClub options={org.options} onChoose={activate} onSignOut={onSignOut} />;
+  }
+
+  if (org.status === 'none' || isNoClubError(me.error)) {
     return <NoClub email={me.data?.email ?? null} onSignOut={onSignOut} />;
   }
 

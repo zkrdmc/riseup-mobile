@@ -80,4 +80,46 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     paddingBottom: space[7],
   },
+  option: {
+    marginBottom: space[3],
+  },
 });
+
+/**
+ * More than one club, and nobody has said which.
+ *
+ * Rare, and worth asking about rather than guessing: picking the first would
+ * work invisibly and be wrong about half the time, and the failure is silent —
+ * an analyst reading last Saturday's match for a club they do not coach.
+ */
+export function ChooseClub({
+  options,
+  onChoose,
+  onSignOut,
+}: {
+  options: Array<{ id: string; name: string }>;
+  onChoose: (id: string) => void;
+  onSignOut: () => void;
+}) {
+  return (
+    <Screen scroll edges={['top', 'bottom']}>
+      <Spacer size={space[7]} />
+      <Label>RiseUp</Label>
+      <Spacer size={space[3]} />
+      <Display>Which club?</Display>
+      <Spacer size={space[3]} />
+      <Body tone={2}>You are a member of more than one. You can switch later in settings.</Body>
+
+      <Spacer size={space[5]} />
+      {options.map((option) => (
+        <View key={option.id} style={styles.option}>
+          <Button label={option.name} onPress={() => onChoose(option.id)} variant="secondary" block />
+        </View>
+      ))}
+
+      <Spacer size={space[5]} />
+      <Button label="Sign out" onPress={onSignOut} variant="ghost" block />
+      <Spacer size={space[7]} />
+    </Screen>
+  );
+}
