@@ -31,6 +31,7 @@ export default function AppLayout() {
           headerShown: false,
         }}
       />
+      <Stack.Screen name="report" />
       <Stack.Screen
         name="match/player"
         options={{

@@ -121,6 +121,12 @@ class CameraStore {
     this.emit();
   }
 
+  /** Wipe the list. Used on account deletion, where nothing may survive. */
+  reset(): void {
+    this.cameras = [];
+    this.emit();
+  }
+
   private emit(): void {
     this.cameras = [...this.cameras];
     for (const l of this.listeners) {

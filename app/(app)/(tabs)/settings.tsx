@@ -1,35 +1,58 @@
 /**
  * Settings.
  *
- * Account, the role switch from §2, and an honest statement of what
- * notifications currently do.
+ * Account, the role switch from §2, and the things both app stores check for:
+ * a reachable privacy policy, a working support route, a way to report a
+ * problem, and account deletion that completes inside the app.
  *
- * The notification preferences of §6 — per-category toggles and quiet hours —
- * are not here. They would be a screen of switches that change nothing, since
- * `GET/PATCH /me/notification-preferences` does not exist and no notification
- * is delivered anyway. A preferences screen that silently does not work is a
- * worse artefact than its absence, because the user believes they have
- * configured something.
+ * ACCOUNT DELETION IS THE ONE WITH TEETH. App Review 5.1.1(v) rejects an app
+ * that sends people to a website to delete an account; Google Play requires
+ * the same in-app path AND a publicly reachable URL for its Data Safety form,
+ * which is `links.deleteAccount`. Both are covered.
+ *
+ * THERE IS NO BILLING HERE, and there must not be. Apple 3.1.1 and Google
+ * Play's Payments policy both require digital purchases to go through platform
+ * billing, and a link opening a Stripe page reads to a reviewer as routing
+ * around it. Quota and subscription are administered on the web dashboard by a
+ * club admin; this app's only involvement is saying when a club is near its
+ * limit.
  */
 
-import { useAuth } from '@clerk/clerk-expo';
-import { useCallback } from 'react';
+import { useAuth, useUser } from '@clerk/clerk-expo';
+import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
+import { useCallback, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
+import { paths } from '../../../src/api/endpoints';
 import { useApi } from '../../../src/api/provider';
 import { useMe } from '../../../src/api/queries';
 import { useAppRole, type AppRole } from '../../../src/auth/role';
+import { cameraStore } from '../../../src/capture/devices/store';
+import { surveyDraft } from '../../../src/capture/survey/draft';
+import { links, openLink } from '../../../src/lib/links';
 import { inbox } from '../../../src/notifications/inbox';
-import { ink, line, minTouchTarget, radius, space, surface } from '../../../src/theme/tokens';
+import {
+  ink,
+  line,
+  minTouchTarget,
+  radius,
+  role as roleColor,
+  space,
+  surface,
+} from '../../../src/theme/tokens';
 import { Button } from '../../../src/ui/Button';
 import { Panel, Row, Rule, Screen, Spacer } from '../../../src/ui/Layout';
 import { Body, BodyStrong, Display, Label, Metric } from '../../../src/ui/Text';
 
 export default function SettingsScreen() {
   const { signOut } = useAuth();
+  const { user } = useUser();
   const api = useApi();
+  const router = useRouter();
   const me = useMe();
   const { role, setRole } = useAppRole();
+  const [deleting, setDeleting] = useState(false);
 
   const onSignOut = useCallback(() => {
     Alert.alert('Sign out?', 'Anything still uploading will stop.', [
@@ -50,6 +73,64 @@ export default function SettingsScreen() {
       },
     ]);
   }, [api, signOut]);
+
+  /**
+   * Delete the account, for real.
+   *
+   * Two calls, in this order, because they do different halves and only one of
+   * them is irreversible:
+   *
+   *   1. `POST /me/delete` records the GDPR erasure request and anonymises the
+   *      audit trail. First on purpose — if it fails, nothing has been
+   *      destroyed and the user can try again.
+   *   2. `user.delete()` deletes the Clerk account. This is what makes the
+   *      deletion real, and it cannot be undone.
+   *
+   * The backend endpoint explicitly does NOT delete the Clerk user — its own
+   * docstring says the account "must be deleted via the account settings UI" —
+   * so step 2 is what actually satisfies the store requirement, and the app
+   * performing it client-side is the reason this flow is compliant at all.
+   *
+   * Club-owned data (matches, footage) is not deleted. The club is the
+   * controller for it, and the confirmation says so rather than implying an
+   * erasure the app cannot perform.
+   */
+  const onDeleteAccount = useCallback(() => {
+    Alert.alert(
+      'Delete your account?',
+      'Your account and your personal data are deleted. Matches and footage belong to your club ' +
+        'and stay with them — ask a club admin if you need those removed too.\n\n' +
+        'This cannot be undone.',
+      [
+        { text: 'Keep my account', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setDeleting(true);
+              try {
+                await api.post(paths.meDelete);
+                await user?.delete();
+                await api.clearCache();
+                inbox.clear();
+                cameraStore.reset();
+                surveyDraft.reset();
+                await signOut();
+              } catch {
+                setDeleting(false);
+                Alert.alert(
+                  'Could not delete the account',
+                  'Something went wrong and nothing was deleted. Try again, or email ' +
+                    `${links.supportEmail}.`,
+                );
+              }
+            })();
+          },
+        },
+      ],
+    );
+  }, [api, user, signOut]);
 
   return (
     <Screen scroll>
@@ -80,21 +161,62 @@ export default function SettingsScreen() {
       <RolePicker value={role} onChange={setRole} />
 
       <Spacer size={space[6]} />
+      <Label>Help</Label>
+      <Spacer size={space[3]} />
+      <Panel style={styles.rows} flat>
+        <LinkRow
+          label="Report a problem"
+          hint="Something broken or confusing"
+          onPress={() => router.push('/report')}
+        />
+        <Rule inset={space[4]} />
+        <LinkRow
+          label="Support"
+          hint={links.supportEmail}
+          external
+          onPress={() => void openLink(links.support)}
+        />
+        <Rule inset={space[4]} />
+        <LinkRow label="Privacy policy" external onPress={() => void openLink(links.privacy)} />
+        <Rule inset={space[4]} />
+        <LinkRow label="Terms of service" external onPress={() => void openLink(links.terms)} />
+      </Panel>
+
+      <Spacer size={space[6]} />
       <Label>Notifications</Label>
       <Spacer size={space[3]} />
       <Panel>
         <Body tone={2} size={13}>
-          Not delivering yet. The app registers this device on every launch, and notifications
-          will start arriving as soon as the server accepts it — no update needed.
-        </Body>
-        <Spacer size={space[3]} />
-        <Body tone={3} size={13}>
-          Per-category preferences and quiet hours arrive with them.
+          This device registers for notifications on every launch. They start arriving as soon as
+          the server accepts it, with no update needed.
         </Body>
       </Panel>
 
       <Spacer size={space[6]} />
       <Button label="Sign out" onPress={onSignOut} variant="secondary" block />
+
+      <Spacer size={space[6]} />
+      <Label>Delete account</Label>
+      <Spacer size={space[3]} />
+      <Panel>
+        <Body tone={3} size={13}>
+          Removes you and your personal data. Matches and footage belong to your club and stay
+          with them.
+        </Body>
+        <Spacer size={space[4]} />
+        <Pressable
+          onPress={onDeleteAccount}
+          disabled={deleting}
+          accessibilityRole="button"
+          accessibilityLabel="Delete my account"
+          accessibilityState={{ disabled: deleting, busy: deleting }}
+          style={({ pressed }) => [styles.destructive, pressed ? styles.destructivePressed : null]}
+        >
+          <BodyStrong color={roleColor.red.fg}>
+            {deleting ? 'Deleting…' : 'Delete my account'}
+          </BodyStrong>
+        </Pressable>
+      </Panel>
 
       <Spacer size={space[5]} />
       <Row gap={space[2]}>
@@ -103,6 +225,47 @@ export default function SettingsScreen() {
       </Row>
       <Spacer size={space[7]} />
     </Screen>
+  );
+}
+
+/**
+ * A row that goes somewhere.
+ *
+ * The trailing icon differs on purpose: a box-arrow means "this leaves the app
+ * and opens a browser", a chevron means "this is another screen here". Getting
+ * that wrong is how somebody taps Privacy at a ground with no signal and gets
+ * a blank page with no explanation.
+ */
+function LinkRow({
+  label,
+  hint,
+  external = false,
+  onPress,
+}: {
+  label: string;
+  hint?: string;
+  external?: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole={external ? 'link' : 'button'}
+      accessibilityLabel={label}
+      accessibilityHint={external ? 'Opens in your browser' : undefined}
+      style={({ pressed }) => [styles.linkRow, pressed ? styles.linkRowPressed : null]}
+    >
+      <View style={styles.linkMain}>
+        <Body>{label}</Body>
+        {hint === undefined ? null : (
+          <>
+            <Spacer size={space[1]} />
+            <Label tone="subtle">{hint}</Label>
+          </>
+        )}
+      </View>
+      <Ionicons name={external ? 'open-outline' : 'chevron-forward'} size={18} color={ink.subtle} />
+    </Pressable>
   );
 }
 
@@ -188,6 +351,36 @@ function Segment({
 }
 
 const styles = StyleSheet.create({
+  rows: {
+    padding: 0,
+    overflow: 'hidden',
+  },
+  linkRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
+    minHeight: minTouchTarget + space[2],
+    paddingHorizontal: space[4],
+    paddingVertical: space[3],
+  },
+  linkRowPressed: {
+    backgroundColor: surface.bg2,
+  },
+  linkMain: {
+    flex: 1,
+  },
+  destructive: {
+    minHeight: minTouchTarget,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: roleColor.red.border,
+    backgroundColor: roleColor.red.bg,
+  },
+  destructivePressed: {
+    backgroundColor: roleColor.red.border,
+  },
   field: {
     paddingVertical: space[3],
   },

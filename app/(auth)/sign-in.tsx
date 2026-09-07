@@ -17,11 +17,13 @@
  * a touchline. The link out is to the dashboard, deliberately.
  */
 
-import { useSignIn } from '@clerk/clerk-expo';
+import { useSSO, useSignIn } from '@clerk/clerk-expo';
 import { useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { KeyboardAvoidingView, Platform, StyleSheet, TextInput, View } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
+import { probeSSOAvailability, usableOptions, type SSOOption } from '../../src/auth/sso';
+import { links, openLink } from '../../src/lib/links';
 import { Button } from '../../src/ui/Button';
 import { Row, Screen, Spacer } from '../../src/ui/Layout';
 import { Body, Display, Label } from '../../src/ui/Text';
@@ -35,6 +37,44 @@ export default function SignInScreen() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [ssoOptions, setSsoOptions] = useState<SSOOption[]>([]);
+
+  const { startSSOFlow } = useSSO();
+
+  useEffect(() => {
+    // Discovered, not assumed: a provider with no credentials in Clerk yet
+    // must not be drawn, because a broken button on the first screen is worse
+    // than one fewer way in.
+    void probeSSOAvailability().then(setSsoOptions);
+  }, []);
+
+  const onSSO = useCallback(
+    async (option: SSOOption) => {
+      if (busy) {
+        return;
+      }
+      setError(null);
+      setBusy(true);
+      try {
+        const { createdSessionId, setActive: activate } = await startSSOFlow({
+          strategy: option.strategy,
+        });
+
+        if (createdSessionId !== undefined && createdSessionId !== null && activate !== undefined) {
+          await activate({ session: createdSessionId });
+          router.replace('/');
+          return;
+        }
+        // No session and no error means the sheet was dismissed. Silent is
+        // correct — the user cancelled, they do not need telling.
+      } catch (e) {
+        setError(clerkMessage(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, startSSOFlow, router],
+  );
 
   const onSubmit = useCallback(async () => {
     if (!isLoaded || busy) {
@@ -119,12 +159,55 @@ export default function SignInScreen() {
               busy={busy}
               block
             />
+
+            {usableOptions(ssoOptions).map((option) => (
+              <View key={option.strategy}>
+                <Spacer size={space[3]} />
+                <Button
+                  label={option.label}
+                  onPress={() => void onSSO(option)}
+                  variant="secondary"
+                  busy={busy}
+                  block
+                />
+              </View>
+            ))}
           </View>
 
           <View style={styles.footer}>
             <Row gap={space[1]}>
               <Body tone={3}>No account?</Body>
               <Body tone={2}>A club admin invites you from the dashboard.</Body>
+            </Row>
+            <Spacer size={space[4]} />
+            {/* Reachable before signing in, which is where both stores expect
+                to find them — a reviewer with no account still has to be able
+                to read what the app does with their data. */}
+            <Row gap={space[4]}>
+              <Pressable
+                onPress={() => void openLink(links.privacy)}
+                accessibilityRole="link"
+                accessibilityLabel="Privacy policy"
+                hitSlop={space[2]}
+              >
+                <Label tone={3}>Privacy</Label>
+              </Pressable>
+              <Pressable
+                onPress={() => void openLink(links.terms)}
+                accessibilityRole="link"
+                accessibilityLabel="Terms of service"
+                hitSlop={space[2]}
+              >
+                <Label tone={3}>Terms</Label>
+              </Pressable>
+              <Pressable
+                onPress={() => void openLink(links.support)}
+                accessibilityRole="link"
+                accessibilityLabel="Support"
+                hitSlop={space[2]}
+              >
+                <Label tone={3}>Support</Label>
+              </Pressable>
             </Row>
           </View>
         </View>

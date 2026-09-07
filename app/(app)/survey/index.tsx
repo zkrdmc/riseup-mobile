@@ -14,7 +14,7 @@
 
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Alert, Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { checkBaseline } from '../../../src/capture/survey/derive';
 import {
@@ -28,6 +28,11 @@ import {
 } from '../../../src/capture/survey/draft';
 import { validateSurvey, type SurveyIssue } from '../../../src/capture/survey/validate';
 import { captureOrientation, captureVenueFix } from '../../../src/capture/sensors/device';
+import {
+  LOCATION_DISCLOSURE,
+  hasAcceptedLocationDisclosure,
+  recordLocationDisclosureAccepted,
+} from '../../../src/capture/sensors/locationDisclosure';
 import { cameraStore } from '../../../src/capture/devices/store';
 import { CameraPicker } from '../../../src/ui/CameraPicker';
 import type { RigRole } from '../../../src/capture/survey/schema';
@@ -181,7 +186,7 @@ function VenueStep() {
   const draft = useSyncExternalStore(surveyDraft.subscribe, surveyDraft.getSnapshot);
   const [locating, setLocating] = useState(false);
 
-  const findVenue = useCallback(async () => {
+  const runFix = useCallback(async () => {
     setLocating(true);
     try {
       const fix = await captureVenueFix();
@@ -190,6 +195,30 @@ function VenueStep() {
       setLocating(false);
     }
   }, []);
+
+  /**
+   * Google Play requires a prominent disclosure BEFORE the system permission
+   * dialog — naming the data, its purpose, and taking an affirmative action.
+   * The OS prompt alone does not satisfy it. Shown once, then remembered.
+   */
+  const findVenue = useCallback(async () => {
+    if (await hasAcceptedLocationDisclosure()) {
+      await runFix();
+      return;
+    }
+    Alert.alert(LOCATION_DISCLOSURE.title, LOCATION_DISCLOSURE.body, [
+      { text: LOCATION_DISCLOSURE.decline, style: 'cancel' },
+      {
+        text: LOCATION_DISCLOSURE.accept,
+        onPress: () => {
+          void (async () => {
+            await recordLocationDisclosureAccepted();
+            await runFix();
+          })();
+        },
+      },
+    ]);
+  }, [runFix]);
 
   return (
     <View>

@@ -286,3 +286,29 @@ coefficients for named consumer bodies, and a seeded plausible one would be
 indistinguishable downstream from a measured one. `catalogue.ts` defines
 support by capability class instead, which is honest and needs no data we do
 not have.
+
+---
+
+## 14. App store compliance needs two things that are not in this repo
+
+**A public account-deletion page at `https://riseupai.co/delete-account`.**
+Google Play requires a URL that works in a browser, without the app installed
+and without signing in, and it is submitted in the Data Safety form — a
+reviewer opens it. In-app deletion alone does not satisfy Play, though it does
+satisfy Apple. The app links to this URL; the page has to exist.
+
+**`POST /me/delete` does not delete the Clerk account.** Its own docstring says
+the account "must be deleted via the account settings UI", which as written
+would fail App Review 5.1.1(v) — an app may not send people to a website to
+delete an account. The app now calls Clerk's `user.delete()` client-side after
+the erasure request, so the flow is compliant today. Doing it server-side with
+the Clerk backend SDK would be better: the two halves would then be atomic
+rather than two calls that can fail between.
+
+Worth adding as well, though neither store requires it:
+
+**`POST /support/reports`.** The report screen composes an email, deliberately
+— the reports most worth receiving are the ones where the API is unreachable,
+and a form that submits over the network cannot carry "I could not sign in". A
+server endpoint alongside it would let a report carry logs instead of asking a
+volunteer to describe a stack trace.

@@ -3,7 +3,7 @@
     "name": "RiseUp",
     "slug": "riseup-mobile",
     "version": "0.1.0",
-    "orientation": "portrait",
+    "orientation": "default",
     "icon": "./assets/icon.png",
     "scheme": "riseup",
     "userInterfaceStyle": "dark",
@@ -11,7 +11,7 @@
     "newArchEnabled": true,
     "ios": {
       "bundleIdentifier": "co.riseupai.mobile",
-      "supportsTablet": false,
+      "supportsTablet": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
         "NSPhotoLibraryUsageDescription": "RiseUp needs access to your photos to upload match footage and clips for analysis.",
@@ -19,7 +19,8 @@
         "NSMicrophoneUsageDescription": "RiseUp records audio alongside video. The audio carries the sync marker that aligns the two cameras in a rig.",
         "NSLocationWhenInUseUsageDescription": "RiseUp uses a single GPS reading to recognise which ground you are at, so pitch measurements can be reused. It is far too coarse to place a camera and is never used for that.",
         "NSMotionUsageDescription": "RiseUp reads the phone's tilt while it is mounted, as a cross-check on the camera calibration."
-      }
+      },
+      "usesAppleSignIn": true
     },
     "android": {
       "package": "co.riseupai.mobile",
@@ -31,7 +32,8 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION"
-      ]
+      ],
+      "resizeableActivity": true
     },
     "plugins": [
       "expo-router",
@@ -69,7 +71,8 @@
         {
           "color": "#35c98d"
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true

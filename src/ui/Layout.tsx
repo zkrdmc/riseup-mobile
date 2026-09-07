@@ -9,10 +9,33 @@
  */
 
 import { type ReactNode } from 'react';
-import { ScrollView, StyleSheet, View, type ViewProps, type ViewStyle } from 'react-native';
+import {
+  ScrollView,
+  StyleSheet,
+  useWindowDimensions,
+  View,
+  type ViewProps,
+  type ViewStyle,
+} from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { line, radius, screenPadding, space, surface } from '../theme/tokens';
+
+/**
+ * The widest a column of content is allowed to get.
+ *
+ * Both stores now check large screens — Apple reviews the iPad build, Google
+ * grades tablets and foldables against its large-screen guidelines — and with
+ * rotation enabled a screen that simply stretches is the failure mode both
+ * look for. A 13" iPad in landscape is 1366pt wide; a paragraph set across all
+ * of it is roughly 200 characters per line, about three times the width at
+ * which prose stops being readable.
+ *
+ * So content is capped and centred rather than stretched. The gutter still
+ * applies inside the cap, and on any phone this constant never comes into
+ * play at all.
+ */
+const MAX_CONTENT_WIDTH = 680;
 
 interface ScreenProps {
   children: ReactNode;
@@ -39,7 +62,18 @@ export function Screen({
   style,
 }: ScreenProps) {
   const insets = useSafeAreaInsets();
-  const padding = bleed ? undefined : { paddingHorizontal: screenPadding };
+  const { width } = useWindowDimensions();
+
+  // Centre the column once the screen is wider than content should ever be.
+  // Symmetric margins rather than a max-width alone, so the gutter is even on
+  // both sides at every width instead of only at the breakpoint.
+  const overflow = Math.max(0, width - MAX_CONTENT_WIDTH);
+  const inset = overflow / 2;
+  const padding = bleed
+    ? inset === 0
+      ? undefined
+      : { paddingHorizontal: inset }
+    : { paddingHorizontal: screenPadding + inset };
 
   if (scroll) {
     return (

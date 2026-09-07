@@ -16,6 +16,13 @@ const V1 = '/api/v1';
 export const paths = {
   /* ── Account ── */
   me: `${V1}/me`,
+  /**
+   * GDPR erasure request. Records the request and anonymises the audit trail;
+   * it does NOT delete the Clerk account, which the app does client-side. Both
+   * halves are needed for App Review 5.1.1(v) and Google Play's equivalent.
+   */
+  meDelete: `${V1}/me/delete`,
+  meExport: `${V1}/me/export`,
 
   /* ── Matches ── */
   matches: `${V1}/matches`,
