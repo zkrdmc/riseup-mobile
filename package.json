@@ -10,7 +10,7 @@
     "prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "smoke": "tsc --ignoreConfig src/capture/survey/schema.ts src/capture/survey/derive.ts src/capture/survey/distortion.ts src/capture/survey/opencv.ts src/capture/survey/exif.ts src/capture/survey/validate.ts --outDir .smoke --module commonjs --target es2020 --skipLibCheck --esModuleInterop && node src/capture/survey/__tests__/smoke.js"
+    "smoke": "node -e \"require('fs').rmSync('.smoke',{recursive:true,force:true})\" && tsc --ignoreConfig src/capture/survey/schema.ts src/capture/survey/derive.ts src/capture/survey/distortion.ts src/capture/survey/opencv.ts src/capture/survey/exif.ts src/capture/survey/validate.ts src/capture/framing/landmarks.ts src/capture/framing/visibility.ts src/capture/framing/detector.ts --outDir .smoke --module commonjs --target es2020 --skipLibCheck --esModuleInterop && node src/capture/survey/__tests__/smoke.js"
   },
   "dependencies": {
     "@clerk/clerk-expo": "^2.20.0",

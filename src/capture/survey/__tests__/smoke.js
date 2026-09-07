@@ -6,11 +6,14 @@
  * this covers the parts that CAN be checked now, which is most of the maths.
  */
 
-const derive = require('../../../../.smoke/derive');
-const distortion = require('../../../../.smoke/distortion');
-const opencv = require('../../../../.smoke/opencv');
-const exif = require('../../../../.smoke/exif');
-const validate = require('../../../../.smoke/validate');
+const derive = require('../../../../.smoke/survey/derive');
+const distortion = require('../../../../.smoke/survey/distortion');
+const opencv = require('../../../../.smoke/survey/opencv');
+const exif = require('../../../../.smoke/survey/exif');
+const validate = require('../../../../.smoke/survey/validate');
+const landmarks = require('../../../../.smoke/framing/landmarks');
+const visibility = require('../../../../.smoke/framing/visibility');
+const detector = require('../../../../.smoke/framing/detector');
 
 let pass = 0;
 let fail = 0;
@@ -358,6 +361,70 @@ console.log('\n11. Frame timing from real timestamps');
   check('median interval ignores the dropped frame', close(timing.fps.value, 30, 0.1), `${timing.fps.value.toFixed(2)} fps`);
   check('jitter is non-zero and reported', timing.jitterMs.value > 0, `${timing.jitterMs.value.toFixed(2)} ms`);
   check('too few samples returns null', derive.timingFromTimestamps([0, 1]) === null);
+}
+
+console.log('');
+console.log('12. Pitch landmarks');
+{
+  const marks = landmarks.pitchLandmarks(105, 68);
+  check('a full-size pitch yields 31 landmarks', marks.length === 31, String(marks.length));
+  check('ids are unique', new Set(marks.map((m) => m.id)).size === marks.length);
+  check('all inside the pitch', marks.every((m) => m.x >= 0 && m.x <= 105 && m.y >= 0 && m.y <= 68));
+  const spot = marks.find((m) => m.id === 'west_penalty_spot');
+  check('west penalty spot is 11 m out, centred', close(spot.x, 11, 1e-9) && close(spot.y, 34, 1e-9));
+  check('east penalty spot mirrors it', close(marks.find((m) => m.id === 'east_penalty_spot').x, 94, 1e-9));
+  const penN = marks.find((m) => m.id === 'west_pen_north');
+  check('penalty area is 16.5 m deep', close(penN.x, 16.5, 1e-9));
+  check('penalty area is 40.32 m wide', close(penN.y, 34 - 20.16, 1e-9));
+  // Interior dimensions are absolute, not scaled: a penalty box is the
+  // same size on a small pitch. That is why this takes real dimensions.
+  const small = landmarks.pitchLandmarks(90, 55);
+  check('penalty depth does not scale with the pitch', close(small.find((m) => m.id === 'west_pen_north').x, 16.5, 1e-9));
+  check('but the corners do', close(small.find((m) => m.id === 'corner_ne').x, 90, 1e-9));
+}
+
+console.log('');
+console.log('13. Visibility gate');
+{
+  const all = landmarks.pitchLandmarks(105, 68);
+  const pick = (ids) => all.filter((m) => ids.includes(m.id));
+  const none = visibility.assessVisibility([]);
+  check('nothing visible blocks', !none.ok && none.issues[0].code === 'NO_LANDMARKS');
+  // Four points solves a homography and is NOT enough for this gate:
+  // four leaves no way to notice that one of them is wrong.
+  check('four landmarks still blocks', !visibility.assessVisibility(pick(['corner_nw','corner_ne','corner_se','corner_sw'])).ok);
+  // The case a raw count would wave through: ten points, all in one box.
+  const clustered = visibility.assessVisibility(pick(['west_pen_gl_north','west_pen_gl_south','west_pen_north','west_pen_south','west_goal_gl_north','west_goal_gl_south','west_goal_north','west_goal_south','west_penalty_spot','west_post_north']));
+  check('ten clustered landmarks are refused', !clustered.ok, clustered.spreadM2.toFixed(0) + ' m2 hull');
+  check('and named as clustered', clustered.issues.some((i) => i.code === 'LANDMARKS_CLUSTERED'));
+  // Fatal and looks fine: all along one touchline.
+  const collinear = visibility.assessVisibility(pick(['corner_nw','corner_sw','west_pen_gl_north','west_pen_gl_south','west_goal_gl_north','west_goal_gl_south','west_post_north','west_post_south']));
+  check('eight landmarks on one goal line are refused', !collinear.ok, 'n=' + collinear.count + ' conditioning ' + collinear.conditioning.toFixed(4));
+  check('and named as collinear', collinear.issues.some((i) => i.code === 'LANDMARKS_COLLINEAR'));
+  const good = visibility.assessVisibility(pick(['corner_nw','corner_ne','corner_se','corner_sw','halfway_north','halfway_south','centre_mark','west_pen_north','west_pen_south','east_pen_north','east_pen_south','west_penalty_spot']));
+  check('a well-spread view passes', good.ok, 'n=' + good.count + ' spread=' + good.spreadM2.toFixed(0) + ' cond=' + good.conditioning.toFixed(2));
+  check('and reports all three regions', good.regions.length === 3, good.regions.join(','));
+  check('conditioning is scale-free', close(visibility.conditioningOf([{x:0,y:0},{x:10,y:0},{x:0,y:10},{x:10,y:10}]), visibility.conditioningOf([{x:0,y:0},{x:100,y:0},{x:0,y:100},{x:100,y:100}]), 1e-9));
+  check('hull area of a 10x10 square is 100', close(visibility.convexHullArea([{x:0,y:0},{x:10,y:0},{x:10,y:10},{x:0,y:10}]), 100, 1e-9));
+  check('two points have no hull', visibility.convexHullArea([{x:0,y:0},{x:1,y:1}]) === 0);
+}
+
+console.log('');
+console.log('14. Detection filtering');
+{
+  const all = landmarks.pitchLandmarks(105, 68);
+  const resolved = detector.resolveDetections([
+    { id: 'corner_nw', x: 10, y: 10, confidence: 0.95 },
+    { id: 'corner_ne', x: 20, y: 10, confidence: 0.4 },
+    { id: 'corner_nw', x: 11, y: 11, confidence: 0.9 },
+    { id: 'not_a_landmark', x: 5, y: 5, confidence: 0.99 },
+    { id: 'centre_mark', x: 50, y: 40, confidence: 0.7 },
+  ], all);
+  check('low confidence is dropped', !resolved.some((l) => l.id === 'corner_ne'));
+  check('duplicates are dropped', resolved.filter((l) => l.id === 'corner_nw').length === 1);
+  check('unknown ids are dropped', resolved.length === 2, resolved.map((l) => l.id).join(','));
+  check('a missing detector reports unavailable, not pass', detector.detectorUnavailable().available === false);
+  check('and none is registered by default', detector.isDetectorAvailable() === false);
 }
 
 console.log(`\n${'='.repeat(60)}`);
