@@ -310,7 +310,13 @@ class RiseupVisionModule : Module() {
       src.fromList(points.map { Point((it["x"] as Number).toDouble(), (it["y"] as Number).toDouble()) })
 
       val k = Mat(3, 3, CvType.CV_64F)
-      k.put(0, 0, kList.map { it.toDouble() }.toDoubleArray())
+      // SPREAD OPERATOR, and it is not optional. OpenCV's Mat has no
+      // `put(int, int, double[])` overload — the double form is
+      // `put(int, int, double... data)`, a vararg — while the float, int,
+      // short and byte forms ARE plain arrays. So a DoubleArray is the one
+      // type that will not bind without `*`, and the compiler error names six
+      // candidates without saying which one you nearly matched.
+      k.put(0, 0, *kList.map { it.toDouble() }.toDoubleArray())
       val d = MatOfDouble()
       d.fromList(dList.map { it.toDouble() })
       val out = MatOfPoint2f()

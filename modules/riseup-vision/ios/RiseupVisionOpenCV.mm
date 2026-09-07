@@ -12,6 +12,9 @@
 //
 
 #ifdef __cplusplus
+#include <algorithm>
+#include <cmath>
+#include <vector>
 #import <opencv2/opencv.hpp>
 #import <opencv2/calib3d.hpp>
 #import <opencv2/imgproc.hpp>
@@ -50,10 +53,6 @@ static NSArray<NSDictionary *> *ArrayFromPoints(const std::vector<cv::Point2f> &
 
 + (NSString *)openCvVersion {
   return [NSString stringWithUTF8String:CV_VERSION];
-}
-
-+ (nullable cv::Mat *)unused_placeholder {
-  return nullptr;
 }
 
 /// Load a file as single-channel grayscale.
