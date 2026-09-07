@@ -116,16 +116,39 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   // First paint: stored choice, else whatever the phone is set to. Following
   // the device is the right default — somebody whose phone is in French did
   // not choose English, they simply have not been asked yet.
+  //
+  // `expo-localization` IS A NATIVE MODULE and throws when the running binary
+  // predates its installation, which is every dev client built before it was
+  // added. That failure has to be contained here, and `loading` has to be
+  // cleared whatever happens: the sync effect below is gated on it, so an
+  // unhandled rejection would leave `loading` true forever and silently kill
+  // dashboard-to-app sync while the picker carried on working. The app would
+  // look entirely fine and be half broken.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
-      const stored = await readStored();
-      const resolved =
-        stored ?? matchDeviceLocale(Localization.getLocales().map((l) => l.languageTag));
-      if (!cancelled) {
-        setActiveLocale(resolved);
-        setLocaleState(resolved);
-        setLoading(false);
+      try {
+        const stored = await readStored();
+        let resolved = stored;
+        if (resolved === null) {
+          try {
+            resolved = matchDeviceLocale(
+              Localization.getLocales().map((l) => l.languageTag),
+            );
+          } catch {
+            // No native module. English until the user picks, which is the
+            // same outcome as a device set to a language we do not carry.
+            resolved = DEFAULT_LOCALE;
+          }
+        }
+        if (!cancelled) {
+          setActiveLocale(resolved);
+          setLocaleState(resolved);
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     })();
     return () => {
