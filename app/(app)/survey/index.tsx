@@ -18,7 +18,6 @@ import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 
 import { checkBaseline } from '../../../src/capture/survey/derive';
 import {
-  SURVEY_STEPS,
   missingFields,
   stepsFor,
   surveyDraft,
@@ -29,6 +28,8 @@ import {
 } from '../../../src/capture/survey/draft';
 import { validateSurvey, type SurveyIssue } from '../../../src/capture/survey/validate';
 import { captureOrientation, captureVenueFix } from '../../../src/capture/sensors/device';
+import { cameraStore } from '../../../src/capture/devices/store';
+import { CameraPicker } from '../../../src/ui/CameraPicker';
 import type { RigRole } from '../../../src/capture/survey/schema';
 import { ink, line, minTouchTarget, radius, role as roleColor, signal, space, surface, type } from '../../../src/theme/tokens';
 import { Button } from '../../../src/ui/Button';
@@ -54,6 +55,7 @@ export default function SurveyScreen() {
 
   useEffect(() => {
     void surveyDraft.hydrate();
+    void cameraStore.hydrate();
   }, []);
 
   // The steps this survey has, not all of them: a single-camera setup has no
@@ -153,26 +155,22 @@ function RigStep() {
       <Spacer size={space[5]} />
       {(draft.rigMode === 'single' ? [draft.cameras[0]] : draft.cameras).map((camera) => (
         <View key={camera.role} style={styles.sourceBlock}>
-          <Label>{draft.rigMode === 'single' ? 'The camera' : `Camera ${camera.role}`}</Label>
-          <Spacer size={space[2]} />
-          <Choice
-            value={camera.sourceKind}
-            options={[
-              { value: 'phone', label: 'A phone' },
-              { value: 'external', label: 'Something else' },
-            ]}
-            onChange={(sourceKind) => surveyDraft.updateCamera(camera.role, { sourceKind })}
+          <CameraPicker
+            label={draft.rigMode === 'single' ? 'The camera' : `Camera ${camera.role}`}
+            selectedId={camera.savedCameraId}
+            onSelect={(saved) =>
+              surveyDraft.updateCamera(camera.role, {
+                savedCameraId: saved.id,
+                sourceKind: saved.kind,
+                deviceModel: saved.label,
+                external: {
+                  ...camera.external,
+                  make: saved.make,
+                  model: saved.model,
+                },
+              })
+            }
           />
-          {camera.sourceKind === 'external' ? (
-            <>
-              <Spacer size={space[3]} />
-              <Body tone={3} size={13}>
-                A camcorder, an action camera, or a fixed camera on a stand. You will be asked for
-                its make and model, and for its lens to be measured — an action camera bends a
-                touchline into a visible arc, and nothing downstream can undo that on its own.
-              </Body>
-            </>
-          ) : null}
         </View>
       ))}
     </View>

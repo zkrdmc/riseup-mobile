@@ -245,3 +245,44 @@ them every Saturday is how a survey stops being done properly.
 
 Also worth adding to `GET /venues/pitches`, which today returns
 `length_m`/`width_m` only — a shape the four-sided survey cannot round-trip.
+
+---
+
+## 13. The saved camera list should be club-wide, not per-device
+
+`src/capture/devices/store.ts` keeps the club's cameras — and their lens
+calibrations — in local storage on one handset. That is the wrong scope for
+what it holds.
+
+A calibration is expensive to produce and identical for everybody: one person
+photographs the chessboard once, and every other phone at that club should
+then be able to pick "Club camcorder" and get the lens model with it. Kept
+locally, the second volunteer to use the same camera has to calibrate it
+again, which is exactly the per-match cost PRD §4.3 exists to remove.
+
+```
+GET    /api/v1/cameras                     # the club's cameras
+POST   /api/v1/cameras                     # register one
+PATCH  /api/v1/cameras/{id}                # rename
+DELETE /api/v1/cameras/{id}
+POST   /api/v1/cameras/{id}/calibrations   # store a solved lens
+```
+
+A calibration is keyed by **resolution and zoom**, not by camera alone — a 4K
+mode is often a sensor crop while 1080p is a scale of it, so the intrinsics
+differ and applying the wrong one is a silent scale error in every distance.
+The client already models it that way (`LensCalibration`).
+
+**The larger prize is cross-club.** Distortion is a property of a lens model,
+not of one club's copy of it. A verified calibration for a given body at a
+given resolution is reusable by every club with the same camera, which turns
+a twenty-minute chessboard session into a lookup for everyone after the first.
+That wants a curated, server-owned catalogue keyed by make/model/resolution —
+seeded from calibrations that ingest has confirmed against real pitch
+geometry, never from vendor datasheets.
+
+The app deliberately ships no such table today: we hold no verified
+coefficients for named consumer bodies, and a seeded plausible one would be
+indistinguishable downstream from a measured one. `catalogue.ts` defines
+support by capability class instead, which is honest and needs no data we do
+not have.

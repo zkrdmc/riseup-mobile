@@ -91,6 +91,14 @@ export const emptyExternal = (): DraftExternal => ({
 
 export interface DraftCamera {
   role: RigRole;
+  /**
+   * Which saved camera this is (`src/capture/devices/store.ts`).
+   *
+   * Replaces typing a make and model every match. The saved camera carries its
+   * own lens calibration, which is what makes PRD 4.3's "once per camera, not
+   * once per match" actually true rather than aspirational.
+   */
+  savedCameraId: string | null;
   sourceKind: CameraSourceKind;
   external: DraftExternal;
   /** A plumb-line distortion fit, for a camera that reports nothing. */
@@ -171,6 +179,7 @@ function emptyCamera(role: RigRole): DraftCamera {
     // The phone is the default because it is the case the app can verify. An
     // operator using a camcorder has to say so, which is the right way round:
     // the weaker path should be chosen deliberately.
+    savedCameraId: null,
     sourceKind: 'phone',
     external: emptyExternal(),
     distortionFit: null,
