@@ -23,10 +23,12 @@ import { Redirect, Tabs } from 'expo-router';
 import { StyleSheet } from 'react-native';
 
 import { useAppRole } from '../../../src/auth/role';
+import { useI18n } from '../../../src/i18n/store';
 import { font, ink, line, space, surface, tracking, type } from '../../../src/theme/tokens';
 
 export default function TabsLayout() {
   const { role, loaded } = useAppRole();
+  const { t } = useI18n();
 
   // Routing before the stored role is read would flash the match list at an
   // Operator on every cold start. Rendering nothing for one frame is cheaper
@@ -55,14 +57,14 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="index"
         options={{
-          title: 'Matches',
+          title: t('tabs.matches'),
           tabBarIcon: ({ color, size }) => <Ionicons name="list" size={size} color={color} />,
         }}
       />
       <Tabs.Screen
         name="capture"
         options={{
-          title: 'Capture',
+          title: t('tabs.capture'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="videocam-outline" size={size} color={color} />
           ),
@@ -71,7 +73,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="uploads"
         options={{
-          title: 'Uploads',
+          title: t('tabs.uploads'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="cloud-upload-outline" size={size} color={color} />
           ),
@@ -80,7 +82,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="inbox"
         options={{
-          title: 'Inbox',
+          title: t('tabs.inbox'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="notifications-outline" size={size} color={color} />
           ),
@@ -89,7 +91,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="settings"
         options={{
-          title: 'Settings',
+          title: t('tabs.settings'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings-outline" size={size} color={color} />
           ),

@@ -6,15 +6,16 @@
  * this covers the parts that CAN be checked now, which is most of the maths.
  */
 
-const derive = require('../../../../.smoke/survey/derive');
-const distortion = require('../../../../.smoke/survey/distortion');
-const opencv = require('../../../../.smoke/survey/opencv');
-const exif = require('../../../../.smoke/survey/exif');
-const validate = require('../../../../.smoke/survey/validate');
-const landmarks = require('../../../../.smoke/framing/landmarks');
-const visibility = require('../../../../.smoke/framing/visibility');
-const detector = require('../../../../.smoke/framing/detector');
-const pair = require('../../../../.smoke/framing/pair');
+const derive = require('../../../../.smoke/capture/survey/derive');
+const distortion = require('../../../../.smoke/capture/survey/distortion');
+const opencv = require('../../../../.smoke/capture/survey/opencv');
+const exif = require('../../../../.smoke/capture/survey/exif');
+const validate = require('../../../../.smoke/capture/survey/validate');
+const landmarks = require('../../../../.smoke/capture/framing/landmarks');
+const visibility = require('../../../../.smoke/capture/framing/visibility');
+const detector = require('../../../../.smoke/capture/framing/detector');
+const pair = require('../../../../.smoke/capture/framing/pair');
+const dicts = require('../../../../.smoke/i18n/dictionaries');
 
 let pass = 0;
 let fail = 0;
@@ -514,6 +515,31 @@ console.log('16. The pair gate');
   check('and is reported, not silently compensated', blind.compensated.length === 0);
 }
 
+
+console.log('');
+console.log('17. Translations');
+{
+  const keys = (d) => Object.keys(d).sort();
+  const en = keys(dicts.en), fr = keys(dicts.fr), ar = keys(dicts.ar);
+  check('English is the reference', en.length > 50, en.length + ' keys');
+  const missingFr = en.filter((k) => dicts.fr[k] === undefined);
+  const missingAr = en.filter((k) => dicts.ar[k] === undefined);
+  check('French covers every English key', missingFr.length === 0, missingFr.join(',') || 'complete');
+  check('Arabic covers every English key', missingAr.length === 0, missingAr.join(',') || 'complete');
+  const extraFr = fr.filter((k) => dicts.en[k] === undefined);
+  const extraAr = ar.filter((k) => dicts.en[k] === undefined);
+  check('no orphan French keys', extraFr.length === 0, extraFr.join(',') || 'none');
+  check('no orphan Arabic keys', extraAr.length === 0, extraAr.join(',') || 'none');
+  // Placeholders must survive translation, or a string renders a literal
+  // brace to a user in one language and the value in another.
+  const ph = (v) => (v.match(/\{(\w+)\}/g) || []).sort().join(',');
+  const mismatched = en.filter((k) => ph(dicts.en[k]) !== ph(dicts.fr[k] || '') || ph(dicts.en[k]) !== ph(dicts.ar[k] || ''));
+  check('placeholders match across all three', mismatched.length === 0, mismatched.join(',') || 'all aligned');
+  // Languages are named in themselves, never translated: somebody stuck
+  // in a language they cannot read has to find their way out.
+  check('language names are identical in every locale', dicts.en['lang.ar'] === dicts.fr['lang.ar'] && dicts.fr['lang.ar'] === dicts.ar['lang.ar'], dicts.ar['lang.ar']);
+  check('and are written in their own script', dicts.en['lang.ar'] === 'العربية');
+}
 
 console.log(`\n${'='.repeat(60)}`);
 console.log(`  ${pass} passed, ${fail} failed`);

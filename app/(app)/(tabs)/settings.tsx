@@ -31,6 +31,8 @@ import { useAppRole, type AppRole } from '../../../src/auth/role';
 import { cameraStore } from '../../../src/capture/devices/store';
 import { surveyDraft } from '../../../src/capture/survey/draft';
 import { links, openLink } from '../../../src/lib/links';
+import { useI18n } from '../../../src/i18n/store';
+import { LANGUAGES, isRtlLocale, type Locale } from '../../../src/i18n/i18n';
 import { inbox } from '../../../src/notifications/inbox';
 import {
   ink,
@@ -38,6 +40,7 @@ import {
   minTouchTarget,
   radius,
   role as roleColor,
+  signal,
   space,
   surface,
 } from '../../../src/theme/tokens';
@@ -52,6 +55,7 @@ export default function SettingsScreen() {
   const router = useRouter();
   const me = useMe();
   const { role, setRole } = useAppRole();
+  const { t, locale, setLocale, syncPending } = useI18n();
   const [deleting, setDeleting] = useState(false);
 
   const onSignOut = useCallback(() => {
@@ -161,7 +165,38 @@ export default function SettingsScreen() {
       <RolePicker value={role} onChange={setRole} />
 
       <Spacer size={space[6]} />
-      <Label>Help</Label>
+      <Label>{t('lang.label')}</Label>
+      <Spacer size={space[3]} />
+      <Body tone={3} size={13}>
+        {t('lang.subtitle')}
+      </Body>
+      <Spacer size={space[3]} />
+      <LanguagePicker
+        value={locale}
+        onChange={(next) => {
+          // Switching direction restarts the app, so say so first. Anything
+          // else looks like a crash at the moment somebody changes a setting.
+          if (isRtlLocale(next) !== isRtlLocale(locale)) {
+            Alert.alert(t('lang.restartTitle'), t('lang.restartBody'), [
+              { text: t('lang.notNow'), style: 'cancel' },
+              { text: t('lang.restartNow'), onPress: () => void setLocale(next) },
+            ]);
+            return;
+          }
+          void setLocale(next);
+        }}
+      />
+      {syncPending ? (
+        <>
+          <Spacer size={space[2]} />
+          <Body tone={3} size={13}>
+            {t('lang.syncFailed')}
+          </Body>
+        </>
+      ) : null}
+
+      <Spacer size={space[6]} />
+      <Label>{t('settings.help')}</Label>
       <Spacer size={space[3]} />
       <Panel style={styles.rows} flat>
         <LinkRow
@@ -225,6 +260,50 @@ export default function SettingsScreen() {
       </Row>
       <Spacer size={space[7]} />
     </Screen>
+  );
+}
+
+/**
+ * The language list.
+ *
+ * Each language is written in ITSELF — English, Français, العربية — never
+ * translated into the language currently showing. Somebody who has ended up in
+ * a language they cannot read has to be able to find their way out, and a list
+ * reading "Anglais / Français / Arabe" is no help to a reader of Arabic.
+ */
+function LanguagePicker({
+  value,
+  onChange,
+}: {
+  value: Locale;
+  onChange: (locale: Locale) => void;
+}) {
+  return (
+    <Panel style={styles.rows} flat>
+      {LANGUAGES.map((language, index) => (
+        <View key={language.code}>
+          {index === 0 ? null : <Rule inset={space[4]} />}
+          <Pressable
+            onPress={() => onChange(language.code)}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: value === language.code }}
+            accessibilityLabel={language.endonym}
+            accessibilityLanguage={language.tag}
+            style={({ pressed }) => [styles.linkRow, pressed ? styles.linkRowPressed : null]}
+          >
+            <View style={styles.linkMain}>
+              {/* Tagged with its own language so a screen reader pronounces it
+                  correctly rather than reading Arabic with English phonetics —
+                  the most common a11y defect on a multilingual language list. */}
+              <Body accessibilityLanguage={language.tag}>{language.endonym}</Body>
+            </View>
+            {value === language.code ? (
+              <Ionicons name="checkmark" size={20} color={signal.base} />
+            ) : null}
+          </Pressable>
+        </View>
+      ))}
+    </Panel>
   );
 }
 

@@ -17,6 +17,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
 import { ApiProvider } from '../src/api/provider';
+import { I18nProvider } from '../src/i18n/store';
 import { tokenCache } from '../src/auth/tokenCache';
 import { config } from '../src/lib/config';
 import { surface } from '../src/theme/tokens';
@@ -67,8 +68,13 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <ClerkProvider publishableKey={config.clerkPublishableKey} tokenCache={tokenCache}>
           <ApiProvider baseUrl={config.apiUrl}>
-            <StatusBar style="light" />
-            <RootNavigator />
+            {/* Inside Clerk because it reads the signed-in user to sync the
+                choice to the account, and above the router so every screen
+                re-renders when the language changes. */}
+            <I18nProvider>
+              <StatusBar style="light" />
+              <RootNavigator />
+            </I18nProvider>
           </ApiProvider>
         </ClerkProvider>
       </SafeAreaProvider>

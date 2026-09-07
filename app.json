@@ -72,7 +72,8 @@
           "color": "#35c98d"
         }
       ],
-      "expo-apple-authentication"
+      "expo-apple-authentication",
+      "expo-localization"
     ],
     "experiments": {
       "typedRoutes": true
