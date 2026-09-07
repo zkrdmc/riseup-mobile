@@ -163,6 +163,35 @@ export function toApiError(status: number, body: unknown): ApiError {
   return new ApiError({ ...mapped, status, detail });
 }
 
+/**
+ * Signed in, but not a member of any club.
+ *
+ * A distinct condition from a normal 403, and the app has to treat it as one.
+ * `clerk_auth.py` derives club_id from the token's org_id and returns 403 on
+ * EVERY endpoint when it is absent, so an account in this state can sign in
+ * and then finds the whole app broken — no matches, no uploads, no settings.
+ *
+ * It happens more often than it sounds: an invitation that was never accepted,
+ * a member removed from the organisation, an account created on the dashboard
+ * but never added to a club, or a social sign-in whose email did not match an
+ * existing invitation and so minted a brand-new user.
+ *
+ * DETECTED ON THE MESSAGE, WHICH IS FRAGILE and is why gap 7 asks for a stable
+ * machine code. The string is matched loosely — any 403 mentioning an
+ * organisation — so a rewording of the sentence does not silently turn this
+ * back into a generic permission error.
+ */
+export function isNoClubError(e: unknown): boolean {
+  if (!(e instanceof ApiError) || e.status !== 403) {
+    return false;
+  }
+  if (e.code === 'no_organisation' || e.code === 'no_organization') {
+    return true;
+  }
+  const detail = typeof e.detail === 'string' ? e.detail.toLowerCase() : '';
+  return detail.includes('organisation') || detail.includes('organization');
+}
+
 /** True when the caller should surface a "sign in again" flow rather than a retry. */
 export function isAuthError(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 401 || e.status === 403);

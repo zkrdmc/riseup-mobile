@@ -1,17 +1,69 @@
 /**
- * The signed-in stack.
+ * The signed-in stack, and the membership gate in front of it.
+ *
+ * THE GATE. Being signed in is not the same as having access. `club_id` comes
+ * from the Clerk token's `org_id`, and `clerk_auth.py` returns 403 from every
+ * endpoint when that is absent — so an account with no organisation reaches the
+ * tab bar and finds the match list, uploads, inbox and settings all broken at
+ * once. That reads as a broken app, rather than as one action somebody else
+ * needs to take.
+ *
+ * `GET /me` is the gate: the cheapest call in the API, needed by several
+ * screens anyway, and cached by React Query — so after the first render the
+ * check costs nothing.
+ *
+ * WHY HERE AND NOT IN THE SIGN-IN HANDLER. Membership can be revoked while
+ * somebody is using the app, and a session restored from the keychain days
+ * later never passes through sign-in at all. Gating the layout catches both.
  *
  * Tabs at the root, everything else pushed over them. `headerShown` is off
  * throughout: each screen draws its own header, because the summary screen's
- * header carries a data-quality banner and a status pill that no native title
- * bar can hold.
+ * carries a data-quality banner and a status pill that no native title bar can
+ * hold.
  */
 
+import { useAuth } from '@clerk/clerk-expo';
 import { Stack } from 'expo-router';
+import { useCallback } from 'react';
 
+import { isNoClubError } from '../../src/api/errors';
+import { useApi } from '../../src/api/provider';
+import { useMe } from '../../src/api/queries';
+import { inbox } from '../../src/notifications/inbox';
 import { ink, surface } from '../../src/theme/tokens';
+import { Screen } from '../../src/ui/Layout';
+import { NoClub } from '../../src/ui/NoClub';
+import { LoadingState } from '../../src/ui/State';
 
 export default function AppLayout() {
+  const me = useMe();
+  const api = useApi();
+  const { signOut } = useAuth();
+
+  const onSignOut = useCallback(() => {
+    void (async () => {
+      await api.clearCache();
+      inbox.clear();
+      await signOut();
+    })();
+  }, [api, signOut]);
+
+  if (isNoClubError(me.error)) {
+    return <NoClub email={me.data?.email ?? null} onSignOut={onSignOut} />;
+  }
+
+  // Block on the FIRST load only. A refetch briefly in flight must not replace
+  // a working app with a spinner, and a failure that is not the no-club case —
+  // offline at a ground, say — must not block either: the tabs handle their own
+  // errors and several of them work with no network at all.
+  if (me.isLoading) {
+    return (
+      <Screen edges={['top', 'bottom']}>
+        <LoadingState label="Checking your club" />
+      </Screen>
+    );
+  }
+
   return (
     <Stack
       screenOptions={{
