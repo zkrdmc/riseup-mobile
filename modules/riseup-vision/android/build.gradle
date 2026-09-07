@@ -1,0 +1,36 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'co.riseupai.mobile.vision'
+version = '0.1.0'
+
+android {
+  namespace "co.riseupai.mobile.vision"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+repositories {
+  mavenCentral()
+}
+
+dependencies {
+  // The Maven build of the official OpenCV Android SDK. Unlike the iOS
+  // CocoaPods spec, this AAR DOES include calib3d — which is the whole reason
+  // this module exists. findChessboardCorners, calibrateCamera and
+  // findHomography all live in that module and are absent from the trimmed
+  // builds most React Native OpenCV wrappers ship.
+  //
+  // Pinned exactly. OpenCV's Java bindings have changed signatures across
+  // minor versions before, and a calibration that silently starts returning a
+  // different coefficient count is not something a build should be free to do
+  // on its own.
+  implementation 'org.opencv:opencv:4.11.0'
+}

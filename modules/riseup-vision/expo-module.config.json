@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["RiseupVisionModule"]
+  },
+  "android": {
+    "modules": ["co.riseupai.mobile.vision.RiseupVisionModule"]
+  }
+}
