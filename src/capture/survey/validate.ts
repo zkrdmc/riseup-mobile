@@ -75,10 +75,137 @@ export function validateSurvey(survey: RigSurvey): SurveyIssue[] {
 
 function validateCamera(c: CameraSurvey): SurveyIssue[] {
   const issues: SurveyIssue[] = [];
-  const role = c.role;
-  const name = `Phone ${role}`;
+  const external = c.sourceKind === 'external';
+  const model = c.external?.model;
+  const name = external
+    ? `Camera ${c.role}${model !== null && model !== undefined ? ` (${model})` : ''}`
+    : `Phone ${c.role}`;
 
-  /* Controlled settings — the three the app must set, not merely record. */
+  issues.push(...validateLensModel(c, name));
+  issues.push(
+    ...(external ? validateExternalCamera(c, name) : validatePhoneSettings(c, name)),
+  );
+  issues.push(...validateIntrinsicsAndGeometry(c, name));
+  issues.push(...validateTiming(c, name));
+  return issues;
+}
+
+/**
+ * PRD §4.3: recording is blocked without a lens model for every camera, or an
+ * explicit acknowledgement that the footage will be treated as rectilinear.
+ *
+ * `unknown` is the blocking state. `none` is NOT — a lens that was measured
+ * and found to be straight is a lens model, and it is the common result on a
+ * long-lens camcorder. Conflating "we looked and it is straight" with "we
+ * never looked" is the exact distinction this gate exists to enforce.
+ */
+function validateLensModel(c: CameraSurvey, name: string): SurveyIssue[] {
+  if (c.distortion.model !== 'unknown') {
+    return [];
+  }
+
+  if (c.external?.acknowledgedRectilinear === true) {
+    return [
+      {
+        role: c.role,
+        blocking: false,
+        code: 'LENS_MODEL_ACKNOWLEDGED_ABSENT',
+        message:
+          `${name} has no lens model, and you have accepted that its footage will be treated as ` +
+          `having a perfectly straight lens. The match will process. If this camera does bend ` +
+          `lines, players near the edges of the frame will be placed wrongly — and the result is ` +
+          `marked, so nobody reads more into it than it can carry.`,
+      },
+    ];
+  }
+
+  return [
+    {
+      role: c.role,
+      blocking: true,
+      code: 'LENS_MODEL_MISSING',
+      message:
+        `${name} has no lens model. Everything downstream assumes a straight lens, and the bend ` +
+        `cannot be recovered afterwards — once the pitch has been fitted to a curved picture, the ` +
+        `curve is invisible. Measure the lens, or accept explicitly that this camera will be ` +
+        `treated as straight.`,
+    },
+  ];
+}
+
+/**
+ * An external camera, where nothing can be verified and everything is a claim.
+ *
+ * The phone checks do not apply — a camcorder has no CaptureResult to read
+ * back — so running them would produce five blocking issues that no operator
+ * could act on and that mean nothing.
+ */
+function validateExternalCamera(c: CameraSurvey, name: string): SurveyIssue[] {
+  const issues: SurveyIssue[] = [];
+  const facts = c.external;
+  if (facts === null) {
+    return issues;
+  }
+
+  // The default-on case, and the most damaging one in the whole survey. GoPro
+  // HyperSmooth and DJI RockSteady ship enabled and warp every frame exactly as
+  // EIS does on a phone — with no API to switch them off and no way for the app
+  // to detect that they are on.
+  if (!facts.stabilisationConfirmedOff) {
+    issues.push({
+      role: c.role,
+      blocking: true,
+      code: 'EXTERNAL_STABILISATION_UNCONFIRMED',
+      message:
+        `Confirm stabilisation is switched off on ${name}. If it is an action camera it is almost ` +
+        `certainly on — HyperSmooth and RockSteady are the factory default, and both shift the ` +
+        `picture between frames under a camera we are treating as bolted down. It has to be ` +
+        `turned off on the camera itself: the app can neither do it nor tell whether it is on.`,
+    });
+  }
+
+  if (!facts.focusConfirmedLocked) {
+    issues.push({
+      role: c.role,
+      blocking: true,
+      code: 'EXTERNAL_FOCUS_UNCONFIRMED',
+      message:
+        `Set ${name} to manual focus on the far side of the pitch, then confirm it. On autofocus ` +
+        `it hunts every time a player crosses the frame, and each refocus moves the lens.`,
+    });
+  }
+
+  if (!facts.exposureConfirmedLocked) {
+    issues.push({
+      role: c.role,
+      blocking: false,
+      code: 'EXTERNAL_EXPOSURE_UNCONFIRMED',
+      message:
+        `Lock the exposure on ${name} if it will let you. On auto, the picture brightens and dims ` +
+        `as clouds pass and shirt colours drift with it — and shirt colour is how players are ` +
+        `told apart.`,
+    });
+  }
+
+  if (c.intrinsics.source === 'exif' && !facts.exifSameModeConfirmed) {
+    issues.push({
+      role: c.role,
+      blocking: false,
+      code: 'EXIF_MODE_UNCONFIRMED',
+      message:
+        `The lens size for ${name} came from a photo it took, and you have not confirmed that ` +
+        `photo was taken in the same mode as the video. Most cameras crop the sensor for video ` +
+        `and not for stills, so this may be 10% out. It is refined against the pitch at ` +
+        `processing.`,
+    });
+  }
+
+  return issues;
+}
+
+function validatePhoneSettings(c: CameraSurvey, name: string): SurveyIssue[] {
+  const issues: SurveyIssue[] = [];
+  const role = c.role;
 
   if (c.settings.videoStabilisation !== 'applied') {
     issues.push({
@@ -157,7 +284,12 @@ function validateCamera(c: CameraSurvey): SurveyIssue[] {
     });
   }
 
-  /* Intrinsics. */
+  return issues;
+}
+
+function validateIntrinsicsAndGeometry(c: CameraSurvey, name: string): SurveyIssue[] {
+  const issues: SurveyIssue[] = [];
+  const role = c.role;
 
   if (c.intrinsics.source === 'unknown') {
     issues.push({
@@ -230,7 +362,12 @@ function validateCamera(c: CameraSurvey): SurveyIssue[] {
     });
   }
 
-  /* Timing. */
+  return issues;
+}
+
+function validateTiming(c: CameraSurvey, name: string): SurveyIssue[] {
+  const issues: SurveyIssue[] = [];
+  const role = c.role;
 
   const skewNs = c.timing.rollingShutterSkewNs;
   if (skewNs !== null && skewNs / 1e6 > ROLLING_SHUTTER_WARN_MS) {
@@ -298,6 +435,14 @@ function stabilisationMessage(name: string, outcome: ControlOutcome, kind: strin
 
 function validatePair(survey: RigSurvey): SurveyIssue[] {
   const issues: SurveyIssue[] = [];
+
+  // A single camera is a legitimate survey, not an incomplete one. None of the
+  // checks below mean anything for it: there is no baseline to cross-check, no
+  // seam to hand identities across, and no second device to match against.
+  if (survey.rigMode === 'single') {
+    return issues;
+  }
+
   const [a, b] = survey.cameras;
 
   if (a === undefined || b === undefined) {

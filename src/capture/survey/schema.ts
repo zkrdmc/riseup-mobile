@@ -85,7 +85,18 @@ export function derived(value: number, from: string[], sigma: number | null = nu
  * the principal point is assumed at the array centre — which is an assumption,
  * recorded as one.
  */
-export type IntrinsicsSource = 'reported' | 'geometric' | 'unknown';
+export type IntrinsicsSource =
+  /** The platform's own calibration. Only ever from the phone running the app. */
+  | 'reported'
+  /** Focal length and physical sensor size. The Android on-phone fallback. */
+  | 'geometric'
+  /** A 35 mm equivalent focal length out of a still's EXIF. See `exif.ts`. */
+  | 'exif'
+  /** A calibration the server holds for this make and model. */
+  | 'profile'
+  /** The operator typed a focal length or a field of view. */
+  | 'operator_entered'
+  | 'unknown';
 
 export interface Intrinsics {
   source: IntrinsicsSource;
@@ -121,13 +132,37 @@ export interface Intrinsics {
  * so `model` says which is present and consumers must not assume.
  */
 export interface Distortion {
-  model: 'brown_conrady' | 'lookup_table' | 'none';
+  model: 'brown_conrady' | 'lookup_table' | 'division' | 'none' | 'unknown';
   /** [k1, k2, k3] radial. */
   radial: number[] | null;
   /** [p1, p2] tangential. */
   tangential: number[] | null;
   /** iOS: normalised radial magnitudes, evenly spaced from centre to corner. */
   lookupTable: number[] | null;
+
+  /**
+   * The division-model fit, when distortion was recovered from the pitch's own
+   * straight lines rather than reported by a device (`distortion.ts`). This is
+   * the only path available for a camera the app cannot interrogate.
+   *
+   * Stored as fitted. `approximateBrownK1` converts for consumers that speak
+   * only Brown-Conrady, and the conversion is first-order — which is why the
+   * fitted coefficient is what is persisted and the conversion is not.
+   */
+  division: {
+    lambda: number;
+    /** Radius normaliser in pixels. The coefficient is meaningless without it. */
+    normalisationPx: number;
+    principalPointX: number;
+    principalPointY: number;
+    imageWidthPx: number;
+    imageHeightPx: number;
+    /** Straightness left over after correction. The fit's own error bar. */
+    rmsResidualPx: number;
+    rmsResidualBeforePx: number;
+    lineCount: number;
+    pointCount: number;
+  } | null;
 }
 
 /* ── Controlled settings ──────────────────────────────────────────────────────
@@ -145,7 +180,17 @@ export type ControlOutcome =
   /** Asked for and the device reported it stayed on. Worse than unsupported: it is refusing. */
   | 'refused'
   /** The app did not attempt it. A bug, if it ever appears in a real session. */
-  | 'not_attempted';
+  | 'not_attempted'
+  /**
+   * A human says they set it on a camera the app cannot reach.
+   *
+   * Deliberately distinct from `applied`, which is a readback. This is a
+   * claim, and it is the strongest evidence obtainable for an external camera
+   * — but a volunteer who ticked a box under time pressure and a device that
+   * confirmed its own state are not the same fact, and averaging them is how
+   * a rig with HyperSmooth left on gets recorded as clean.
+   */
+  | 'operator_confirmed';
 
 export interface ControlledSettings {
   /**
@@ -314,8 +359,79 @@ export interface VenueFix {
 
 export type RigRole = 'A' | 'B';
 
+/**
+ * Whose camera is this?
+ *
+ * `phone` is the handset running the app: Camera2 or AVFoundation can be asked
+ * for intrinsics, distortion and timing, and the three critical settings can be
+ * SET and read back.
+ *
+ * `external` is anything else — a camcorder, an action camera, a DSLR, a fixed
+ * camera on a stand. None of that is reachable. Every fact about it arrives by
+ * a weaker route: distortion from the pitch's own straight lines
+ * (`distortion.ts`), focal length from a still's EXIF (`exif.ts`) or a stored
+ * profile, and the settings only as an operator's word.
+ *
+ * The distinction is recorded rather than inferred because it changes how much
+ * every other field in this record is worth.
+ */
+export type CameraSourceKind = 'phone' | 'external';
+
+/**
+ * What is known about a camera the app cannot interrogate.
+ *
+ * `make` and `model` are the key into a stored calibration profile — the point
+ * being that a club's camcorder is calibrated once, by whoever surveys it
+ * first, and every club with the same model benefits.
+ */
+export interface ExternalCameraFacts {
+  make: string | null;
+  model: string | null;
+  lensModel: string | null;
+
+  /**
+   * The operator's answer to "is stabilisation off?".
+   *
+   * Asked explicitly and prominently because the default is the dangerous one.
+   * GoPro's HyperSmooth and DJI's RockSteady are ON out of the box, and both
+   * warp every frame — which destroys the fixed-camera assumption exactly as
+   * EIS does on a phone, with no way for the app to detect it or switch it off.
+   */
+  stabilisationConfirmedOff: boolean;
+  /** Confirmed as locked, since none of it can be verified. */
+  focusConfirmedLocked: boolean;
+  exposureConfirmedLocked: boolean;
+
+  /**
+   * Did the EXIF still come from the same mode and zoom as the video?
+   *
+   * Most cameras crop the sensor for video and not for stills, so a focal
+   * length read from a photograph can be 10% wrong or more. See `exif.ts`.
+   */
+  exifSameModeConfirmed: boolean;
+
+  /** The video's own frame size, which is what will actually be processed. */
+  videoWidthPx: number | null;
+  videoHeightPx: number | null;
+
+  /**
+   * "Film it anyway, and treat this lens as perfectly straight."
+   *
+   * PRD 4.3 blocks recording without a lens model and then provides this door,
+   * because a club that turns up with an uncalibrated camera and no chessboard
+   * should still get their match filmed. What they must not do is get it
+   * filmed while believing it was calibrated — so the acknowledgement is
+   * explicit, it travels in the record, and the job is marked with it.
+   */
+  acknowledgedRectilinear: boolean;
+}
+
 export interface CameraSurvey {
   role: RigRole;
+  /** Phone or external. Changes what every field below is worth. */
+  sourceKind: CameraSourceKind;
+  /** Present only when `sourceKind` is `external`. */
+  external: ExternalCameraFacts | null;
   deviceId: string;
   deviceModel: string;
 
@@ -368,6 +484,16 @@ export interface RigSurvey {
   startedAt: string;
   completedAt: string | null;
 
+  /**
+   * One camera or two.
+   *
+   * A club filming on a single camcorder is the low-commitment case §5 is
+   * built around, and it is a legitimate survey — it just cannot have a
+   * baseline, and the handover checks do not apply. Recorded explicitly so
+   * that a `single` rig is distinguishable from a `pair` whose second camera
+   * was never filled in.
+   */
+  rigMode: 'single' | 'pair';
   pitch: PitchSurvey;
   venueFix: VenueFix | null;
   cameras: CameraSurvey[];

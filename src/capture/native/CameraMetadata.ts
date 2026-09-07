@@ -20,6 +20,13 @@
  *    LENS_INTRINSIC_CALIBRATION      → [fx, fy, cx, cy, skew], active-array px
  *    LENS_DISTORTION                 → [k1, k2, k3, p1, p2]
  *
+ *  ⚠ THAT ORDER IS NOT OpenCV'S. OpenCV's distCoeffs is [k1, k2, p1, p2, k3] —
+ *  the tangential pair sits in the MIDDLE, not at the end. Passing Android's
+ *  array straight to `cv2.undistort` swaps k3 with p1/p2, which does not throw,
+ *  does not look obviously wrong on a centre-frame test, and quietly ruins the
+ *  corners — where the far side of the pitch is. Convert explicitly at the
+ *  boundary, never by assignment. (PRD §4.3.)
+ *
  *  Available only when LENS_INFO_AVAILABLE and the device says
  *  REQUEST_AVAILABLE_CAPABILITIES contains MANUAL_SENSOR. COVERAGE IS
  *  INCONSISTENT AND THE VALUES ARE NOT ALWAYS REAL — several shipping devices

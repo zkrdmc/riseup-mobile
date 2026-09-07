@@ -20,6 +20,7 @@ import { checkBaseline } from '../../../src/capture/survey/derive';
 import {
   SURVEY_STEPS,
   missingFields,
+  stepsFor,
   surveyDraft,
   toRigSurvey,
   type DraftCamera,
@@ -39,6 +40,7 @@ import { Body, BodyStrong, Display, Label, Metric } from '../../../src/ui/Text';
 const APP_VERSION = '0.1.0';
 
 const STEP_TITLES: Record<SurveyStep, string> = {
+  rig: 'What are you filming with?',
   venue: 'The pitch',
   cameraA: 'Phone A',
   cameraB: 'Phone B',
@@ -54,40 +56,44 @@ export default function SurveyScreen() {
     void surveyDraft.hydrate();
   }, []);
 
-  const stepIndex = SURVEY_STEPS.indexOf(draft.step);
+  // The steps this survey has, not all of them: a single-camera setup has no
+  // phone B and no baseline, and showing them would imply an incomplete survey.
+  const steps = stepsFor(draft);
+  const stepIndex = steps.indexOf(draft.step);
 
   const goTo = useCallback((step: SurveyStep) => {
     surveyDraft.update({ step });
   }, []);
 
   const next = useCallback(() => {
-    const n = SURVEY_STEPS[stepIndex + 1];
+    const n = steps[stepIndex + 1];
     if (n !== undefined) {
       goTo(n);
     }
-  }, [stepIndex, goTo]);
+  }, [steps, stepIndex, goTo]);
 
   const back = useCallback(() => {
-    const p = SURVEY_STEPS[stepIndex - 1];
+    const p = steps[stepIndex - 1];
     if (p === undefined) {
       router.back();
       return;
     }
     goTo(p);
-  }, [stepIndex, goTo, router]);
+  }, [steps, stepIndex, goTo, router]);
 
   return (
     <Screen scroll>
       <Spacer size={space[3]} />
       <Row gap={space[2]}>
-        <Label>{`Step ${stepIndex + 1} of ${SURVEY_STEPS.length}`}</Label>
+        <Label>{`Step ${stepIndex + 1} of ${steps.length}`}</Label>
       </Row>
       <Spacer size={space[2]} />
-      <StepBar index={stepIndex} />
+      <StepBar index={stepIndex} total={steps.length} />
       <Spacer size={space[4]} />
       <Display>{STEP_TITLES[draft.step]}</Display>
       <Spacer size={space[5]} />
 
+      {draft.step === 'rig' ? <RigStep /> : null}
       {draft.step === 'venue' ? <VenueStep /> : null}
       {draft.step === 'cameraA' ? <CameraStep role="A" /> : null}
       {draft.step === 'cameraB' ? <CameraStep role="B" /> : null}
@@ -107,6 +113,71 @@ export default function SurveyScreen() {
 }
 
 /* ── Steps ────────────────────────────────────────────────────────────────── */
+
+/**
+ * What is doing the filming.
+ *
+ * First, because it changes everything after it. A phone can be interrogated
+ * for its lens, its timing and its settings; a camcorder cannot, and every
+ * later step has to ask a human instead. Getting this wrong halfway through
+ * means redoing the camera steps.
+ */
+function RigStep() {
+  const draft = useSyncExternalStore(surveyDraft.subscribe, surveyDraft.getSnapshot);
+
+  return (
+    <View>
+      <Body tone={2}>
+        The app can read a phone&apos;s lens directly. Anything else has to be measured, so it asks
+        you a few more questions.
+      </Body>
+
+      <Spacer size={space[5]} />
+      <Label>How many cameras?</Label>
+      <Spacer size={space[2]} />
+      <Choice
+        value={draft.rigMode}
+        options={[
+          { value: 'pair', label: 'Two' },
+          { value: 'single', label: 'One' },
+        ]}
+        onChange={(rigMode) => surveyDraft.update({ rigMode })}
+      />
+      <Spacer size={space[2]} />
+      <Body tone={3} size={13}>
+        {draft.rigMode === 'single'
+          ? 'One camera covers the whole pitch from further back. Fewer pixels on each player, and no seam to hand identities across.'
+          : 'Two cameras, one per half, with an overlap in the middle where players are handed from one to the other.'}
+      </Body>
+
+      <Spacer size={space[5]} />
+      {(draft.rigMode === 'single' ? [draft.cameras[0]] : draft.cameras).map((camera) => (
+        <View key={camera.role} style={styles.sourceBlock}>
+          <Label>{draft.rigMode === 'single' ? 'The camera' : `Camera ${camera.role}`}</Label>
+          <Spacer size={space[2]} />
+          <Choice
+            value={camera.sourceKind}
+            options={[
+              { value: 'phone', label: 'A phone' },
+              { value: 'external', label: 'Something else' },
+            ]}
+            onChange={(sourceKind) => surveyDraft.updateCamera(camera.role, { sourceKind })}
+          />
+          {camera.sourceKind === 'external' ? (
+            <>
+              <Spacer size={space[3]} />
+              <Body tone={3} size={13}>
+                A camcorder, an action camera, or a fixed camera on a stand. You will be asked for
+                its make and model, and for its lens to be measured — an action camera bends a
+                touchline into a visible arc, and nothing downstream can undo that on its own.
+              </Body>
+            </>
+          ) : null}
+        </View>
+      ))}
+    </View>
+  );
+}
 
 function VenueStep() {
   const draft = useSyncExternalStore(surveyDraft.subscribe, surveyDraft.getSnapshot);
@@ -492,12 +563,12 @@ function IssueCard({ issue }: { issue: SurveyIssue }) {
   );
 }
 
-function StepBar({ index }: { index: number }) {
+function StepBar({ index, total }: { index: number; total: number }) {
   return (
     <Row gap={space[1]}>
-      {SURVEY_STEPS.map((step, i) => (
+      {Array.from({ length: total }, (_, i) => (
         <View
-          key={step}
+          key={i}
           style={[styles.stepSegment, i <= index ? styles.stepSegmentDone : null]}
         />
       ))}
@@ -580,6 +651,9 @@ const styles = StyleSheet.create({
   choiceSelected: {
     borderColor: line.borderHi,
     backgroundColor: surface.bg2,
+  },
+  sourceBlock: {
+    marginBottom: space[5],
   },
   missingRow: {
     flexDirection: 'row',

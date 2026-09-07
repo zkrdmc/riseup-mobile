@@ -17,11 +17,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 
 import { sigmaFor, type MeasurementMethod } from '../../ui/MeasurementInput';
+import type { DistortionFit } from './distortion';
+import type { ExifCameraFacts } from './exif';
 import {
   SURVEY_SCHEMA_VERSION,
   measured,
+  type CameraSourceKind,
   type CameraSurvey,
   type ControlledSettings,
+  type ExternalCameraFacts,
   type Distortion,
   type Intrinsics,
   type OrientationSample,
@@ -43,8 +47,56 @@ export const emptyMeasure = (method: MeasurementMethod = 'tape'): DraftMeasure =
   method,
 });
 
+/** The external-camera answers, all of which are claims rather than readbacks. */
+export interface DraftExternal {
+  make: string | null;
+  model: string | null;
+  lensModel: string | null;
+  stabilisationConfirmedOff: boolean;
+  focusConfirmedLocked: boolean;
+  exposureConfirmedLocked: boolean;
+  exifSameModeConfirmed: boolean;
+  videoWidthPx: number | null;
+  videoHeightPx: number | null;
+  /** Raw EXIF facts from the sample still, kept so the derivation can be redone. */
+  exif: ExifCameraFacts | null;
+  /**
+   * "Film it anyway and treat the lens as rectilinear."
+   *
+   * PRD §4.3 blocks recording without a lens model, and then provides this
+   * door — because a club that turns up with an uncalibrated camera and no
+   * chessboard should still get a match filmed. What it must not do is get one
+   * filmed while believing it is calibrated, so the acknowledgement is
+   * explicit, it travels in the record, and the job is marked with it.
+   */
+  acknowledgedRectilinear: boolean;
+}
+
+export const emptyExternal = (): DraftExternal => ({
+  make: null,
+  model: null,
+  lensModel: null,
+  // All false by default, and the operator has to actively say otherwise.
+  // Defaulting these to true would turn the most dangerous setting in the
+  // whole survey into something you get by tapping Next.
+  stabilisationConfirmedOff: false,
+  focusConfirmedLocked: false,
+  exposureConfirmedLocked: false,
+  exifSameModeConfirmed: false,
+  videoWidthPx: null,
+  videoHeightPx: null,
+  exif: null,
+  acknowledgedRectilinear: false,
+});
+
 export interface DraftCamera {
   role: RigRole;
+  sourceKind: CameraSourceKind;
+  external: DraftExternal;
+  /** A plumb-line distortion fit, for a camera that reports nothing. */
+  distortionFit: DistortionFit | null;
+  /** The frame the lines were tapped on, kept so the fit can be redone. */
+  frameUri: string | null;
   deviceId: string | null;
   deviceModel: string | null;
 
@@ -67,6 +119,7 @@ export interface SurveyDraft {
   surveyId: string;
   startedAt: string;
   step: SurveyStep;
+  rigMode: 'single' | 'pair';
 
   venueId: string | null;
   venueFix: VenueFix | null;
@@ -92,14 +145,36 @@ export interface SurveyDraft {
  * read the verdict. PRD §4.2 asks for exactly this shape for the framing
  * points, and the survey is the step before it.
  */
-export const SURVEY_STEPS = ['venue', 'cameraA', 'cameraB', 'baseline', 'review'] as const;
+export const SURVEY_STEPS = ['rig', 'venue', 'cameraA', 'cameraB', 'baseline', 'review'] as const;
 export type SurveyStep = (typeof SURVEY_STEPS)[number];
+
+/**
+ * The steps this particular survey actually has.
+ *
+ * A single-camera setup has no second camera and no baseline — and showing
+ * those steps greyed out, or showing them and letting the operator skip, both
+ * imply the survey is incomplete when it is not. A club filming on one
+ * camcorder has done everything that can be done.
+ */
+export function stepsFor(draft: SurveyDraft): SurveyStep[] {
+  if (draft.rigMode === 'single') {
+    return SURVEY_STEPS.filter((s) => s !== 'cameraB' && s !== 'baseline');
+  }
+  return [...SURVEY_STEPS];
+}
 
 const STORAGE_KEY = 'riseup.surveyDraft.v1';
 
 function emptyCamera(role: RigRole): DraftCamera {
   return {
     role,
+    // The phone is the default because it is the case the app can verify. An
+    // operator using a camcorder has to say so, which is the right way round:
+    // the weaker path should be chosen deliberately.
+    sourceKind: 'phone',
+    external: emptyExternal(),
+    distortionFit: null,
+    frameUri: null,
     deviceId: null,
     deviceModel: null,
     heightM: emptyMeasure(),
@@ -122,7 +197,8 @@ export function emptyDraft(): SurveyDraft {
   return {
     surveyId: Crypto.randomUUID(),
     startedAt: new Date().toISOString(),
-    step: 'venue',
+    step: 'rig',
+    rigMode: 'pair',
     venueId: null,
     venueFix: null,
     northTouchlineM: emptyMeasure('paced'),
@@ -275,10 +351,12 @@ export function toRigSurvey(draft: SurveyDraft, appVersion: string): RigSurvey {
   const q = (m: DraftMeasure) =>
     m.value === null ? measured(0, 0) : measured(m.value, sigmaFor(m.method, m.value));
 
-  const cameras: CameraSurvey[] = draft.cameras.map((c) => ({
+  const cameras: CameraSurvey[] = activeCameras(draft).map((c) => ({
     role: c.role,
+    sourceKind: c.sourceKind,
+    external: c.sourceKind === 'external' ? toExternalFacts(c) : null,
     deviceId: c.deviceId ?? 'unknown',
-    deviceModel: c.deviceModel ?? 'unknown',
+    deviceModel: c.deviceModel ?? c.external.model ?? 'unknown',
     heightM: q(c.heightM),
     perpendicularDistanceM: q(c.perpendicularDistanceM),
     alongTouchlineM: q(c.alongTouchlineM),
@@ -306,12 +384,7 @@ export function toRigSurvey(draft: SurveyDraft, appVersion: string): RigSurvey {
       activeArrayWidthPx: 0,
       activeArrayHeightPx: 0,
     },
-    distortion: c.distortion ?? {
-      model: 'none',
-      radial: null,
-      tangential: null,
-      lookupTable: null,
-    },
+    distortion: distortionFor(c),
     settings: c.settings ?? {
       videoStabilisation: 'not_attempted',
       opticalStabilisation: 'not_attempted',
@@ -340,6 +413,7 @@ export function toRigSurvey(draft: SurveyDraft, appVersion: string): RigSurvey {
     venueId: draft.venueId,
     startedAt: draft.startedAt,
     completedAt: new Date().toISOString(),
+    rigMode: draft.rigMode,
     pitch: {
       northTouchlineM: q(draft.northTouchlineM),
       southTouchlineM: q(draft.southTouchlineM),
@@ -355,5 +429,68 @@ export function toRigSurvey(draft: SurveyDraft, appVersion: string): RigSurvey {
     baselineM: draft.baselineM.value === null ? null : q(draft.baselineM),
     notes: draft.notes.length > 0 ? draft.notes : null,
     appVersion,
+  };
+}
+
+/** The cameras this survey actually has. A single rig has one. */
+export function activeCameras(draft: SurveyDraft): DraftCamera[] {
+  return draft.rigMode === 'single' ? [draft.cameras[0]] : [...draft.cameras];
+}
+
+function toExternalFacts(c: DraftCamera): ExternalCameraFacts {
+  return {
+    make: c.external.make,
+    model: c.external.model,
+    lensModel: c.external.lensModel,
+    stabilisationConfirmedOff: c.external.stabilisationConfirmedOff,
+    focusConfirmedLocked: c.external.focusConfirmedLocked,
+    exposureConfirmedLocked: c.external.exposureConfirmedLocked,
+    exifSameModeConfirmed: c.external.exifSameModeConfirmed,
+    videoWidthPx: c.external.videoWidthPx,
+    videoHeightPx: c.external.videoHeightPx,
+    acknowledgedRectilinear: c.external.acknowledgedRectilinear,
+  };
+}
+
+/**
+ * The lens model for this camera.
+ *
+ * A plumb-line fit wins over a device report only because a device that
+ * reported anything would not have been given a fit in the first place. Absent
+ * both, the model is `unknown` — NOT `none`. `none` is a finding ("this lens
+ * is rectilinear"); `unknown` is an absence, and PRD §4.3 blocks recording on
+ * the second and not the first.
+ */
+function distortionFor(c: DraftCamera): Distortion {
+  if (c.distortionFit !== null) {
+    const f = c.distortionFit;
+    return {
+      model: 'division',
+      radial: null,
+      tangential: null,
+      lookupTable: null,
+      division: {
+        lambda: f.lambda,
+        normalisationPx: f.normalisationPx,
+        principalPointX: f.principalPointPx.x,
+        principalPointY: f.principalPointPx.y,
+        imageWidthPx: f.imageWidthPx,
+        imageHeightPx: f.imageHeightPx,
+        rmsResidualPx: f.rmsResidualPx,
+        rmsResidualBeforePx: f.rmsResidualBeforePx,
+        lineCount: f.lineCount,
+        pointCount: f.pointCount,
+      },
+    };
+  }
+  if (c.distortion !== null) {
+    return c.distortion;
+  }
+  return {
+    model: 'unknown',
+    radial: null,
+    tangential: null,
+    lookupTable: null,
+    division: null,
   };
 }
