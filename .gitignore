@@ -49,3 +49,6 @@ yarn-error.*
 # symlinks to absolute paths on one machine and must never be committed.
 .agents/
 .claude/skills/
+
+# Transpiled output for `npm run smoke`
+.smoke/

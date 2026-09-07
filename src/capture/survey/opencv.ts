@@ -145,14 +145,24 @@ export function undistortNormalised(
   model: OpenCvDistortion,
   x: number,
   y: number,
-  iterations = 8,
+  maxIterations = 20,
 ): { x: number; y: number } {
   let ux = x;
   let uy = y;
-  for (let i = 0; i < iterations; i += 1) {
+  for (let i = 0; i < maxIterations; i += 1) {
     const d = distortNormalised(model, ux, uy);
-    ux += x - d.x;
-    uy += y - d.y;
+    const dx = x - d.x;
+    const dy = y - d.y;
+    ux += dx;
+    uy += dy;
+    // Stop once the correction stops mattering. The iteration converges
+    // linearly, so a strongly barrelled lens at the frame corner needs roughly
+    // three times the steps a mild one does — a fixed count is therefore
+    // either wasteful on the common case or short on the case that matters.
+    // 1e-9 normalised is far below a millipixel at any real focal length.
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
+      break;
+    }
   }
   return { x: ux, y: uy };
 }
