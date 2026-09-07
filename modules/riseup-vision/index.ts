@@ -6,5 +6,6 @@
  * why the ordering is normalised rather than carried per platform.
  */
 
-export { default as RiseupVision } from './src/RiseupVisionModule';
+export { getRiseupVision, isRiseupVisionAvailable } from './src/RiseupVisionModule';
+export { runVisionSelfTest, type SelfTestResult } from './src/selfTest';
 export * from './src/RiseupVision.types';

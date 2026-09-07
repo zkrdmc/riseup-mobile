@@ -18,11 +18,12 @@
 
 import { useAuth } from '@clerk/clerk-expo';
 import { useRouter } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
 import { useMe } from '../../src/api/queries';
+import { runVisionSelfTest, type SelfTestResult } from '../../modules/riseup-vision';
 import { uploadManager } from '../../src/upload/manager';
 import {
   collectDiagnostics,
@@ -58,6 +59,15 @@ export default function ReportScreen() {
   const [topic, setTopic] = useState<string>('other');
   const [detail, setDetail] = useState('');
   const [failed, setFailed] = useState(false);
+  const [vision, setVision] = useState<SelfTestResult | null>(null);
+
+  // Run once when the screen opens. A build can install and run with OpenCV
+  // present and calib3d absent — nothing else in the app would notice until an
+  // operator taps four pitch corners at a ground. Attaching the answer to every
+  // support ticket means the question is already settled when one arrives.
+  useEffect(() => {
+    void runVisionSelfTest().then(setVision);
+  }, []);
 
   const diagnostics = useMemo(
     () => collectDiagnostics(me.data?.club_id ?? null, userId ?? null),
@@ -76,7 +86,14 @@ export default function ReportScreen() {
         ? 'Upload queue: empty'
         : `Upload queue: ${queue.map((e) => `${e.status}`).join(', ')}`;
 
-    const body = `${detail.trim()}\n\n${queueLine}`;
+    // Whether the camera maths is working travels with every report, because
+    // a device where calib3d is missing produces symptoms that look like
+    // anything else — a survey that will not finish, a framing check that
+    // never turns green — and nothing in those symptoms points at the cause.
+    const visionLine =
+      vision === null ? 'Vision module: not checked' : `Vision module: ${vision.detail}`;
+
+    const body = `${detail.trim()}\n\n${queueLine}\n${visionLine}`;
     const opened = await openLink(supportMailto(`RiseUp app — ${label}`, body, diagnostics));
     if (opened) {
       router.back();
@@ -86,7 +103,7 @@ export default function ReportScreen() {
       // to go.
       setFailed(true);
     }
-  }, [topic, detail, diagnostics, router]);
+  }, [topic, detail, diagnostics, vision, router]);
 
   return (
     <Screen scroll>
@@ -147,9 +164,17 @@ export default function ReportScreen() {
         {/* Shown in full, before sending. Nobody should have to guess what
             leaves their phone, and it is a short enough list to just print. */}
         <Body tone={3} size={13}>
-          Your message, the state of your upload queue, and the lines below. No footage, no player
-          names, no location.
+          Your message, the state of your upload queue, whether the camera maths is working, and
+          the lines below. No footage, no player names, no location.
         </Body>
+        {vision === null ? null : (
+          <>
+            <Spacer size={space[3]} />
+            <Body tone={vision.calib3dWorks ? 3 : 2} size={13}>
+              {vision.detail}
+            </Body>
+          </>
+        )}
         <Spacer size={space[3]} />
         <Body tone="subtle" size={13} style={styles.mono}>
           {formatDiagnostics(diagnostics).trim()}
