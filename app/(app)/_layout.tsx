@@ -21,7 +21,7 @@
  * not mounted until there is one.
  */
 
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { Stack } from 'expo-router';
 import { useCallback } from 'react';
 

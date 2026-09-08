@@ -17,8 +17,30 @@
  * the account is broken.
  *
  * So the flow is two steps: hand Clerk the email, read `supportedFirstFactors`
- * off the response, and offer what is actually available. The account decides,
+ * off the resource, and offer what is actually available. The account decides,
  * not the app.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ *  CORE 3: THE RESOURCE IS THE STATE, AND ERRORS COME BACK RATHER THAN UP
+ * ══════════════════════════════════════════════════════════════════════════
+ * `useSignIn` is signal-based here. It returns the live `SignInFuture`
+ * resource instead of `{ isLoaded, setActive }`, which changes two things in
+ * this file:
+ *
+ *   - There is no `isLoaded` gate. The resource is never null, so the "tapped
+ *     Continue before Clerk finished loading" case stops existing rather than
+ *     being guarded against at four call sites.
+ *
+ *   - Every method RETURNS `{ error }` rather than throwing, and the outcome
+ *     is read off `signIn.status` afterwards. A `try` block alone would treat
+ *     "no such account" as success and advance to a password field for an
+ *     account that does not exist, so each call checks the returned error
+ *     first. The `catch` is still there, for the different failure of never
+ *     having reached Clerk at all.
+ *
+ * `signIn.finalize()` replaces `setActive({ session })`. It takes no session
+ * id, because the resource already knows which sign-in completed — passing a
+ * stale id from an earlier attempt is no longer possible.
  *
  * WHY EMAIL CODES ARE NOT A CONSOLATION PRIZE HERE. The Operator is standing
  * on a touchline in the rain with a shared club phone. Typing a password on a
@@ -33,7 +55,7 @@
  * a touchline. `src/ui/NoClub.tsx` catches anyone who arrives in that state.
  */
 
-import { useSSO, useSignIn } from '@clerk/clerk-expo';
+import { useSSO, useSignIn } from '@clerk/expo';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -62,7 +84,11 @@ type Step =
   | { kind: 'code'; sentTo: string };
 
 export default function SignInScreen() {
-  const { signIn, setActive, isLoaded } = useSignIn();
+  // Core 3's `useSignIn` is signal-based. It returns the live `SignInFuture`
+  // resource rather than `{ isLoaded, setActive }`, and the resource is never
+  // null — so the `isLoaded` guard that used to wrap every call is gone, and
+  // with it a class of "tapped Continue before Clerk finished loading" bugs.
+  const { signIn } = useSignIn();
   const router = useRouter();
 
   const [email, setEmail] = useState('');
@@ -84,40 +110,54 @@ export default function SignInScreen() {
     void probeSSOAvailability().then(setSsoOptions);
   }, []);
 
-  const finish = useCallback(
-    async (createdSessionId: string | null | undefined) => {
-      // `setActive` is undefined until Clerk has loaded. Guarding on it rather
-      // than on `isLoaded` alone keeps the narrowing local to the one call that
-      // needs it.
-      if (createdSessionId === null || createdSessionId === undefined || setActive === undefined) {
-        return false;
-      }
-      await setActive({ session: createdSessionId });
-      router.replace('/');
-      return true;
-    },
-    [setActive, router],
-  );
+  /**
+   * Turn a completed sign-in into an active session.
+   *
+   * `finalize()` is Core 3's replacement for `setActive({ session })`. The
+   * difference that matters: there is no session id to thread through, because
+   * the resource already knows which sign-in completed. Passing the wrong id —
+   * or a stale one from an earlier attempt — is no longer possible.
+   */
+  const finish = useCallback(async () => {
+    if (signIn.status !== 'complete') {
+      return false;
+    }
+    const { error: finalizeError } = await signIn.finalize();
+    if (finalizeError !== null) {
+      setError(clerkMessage(finalizeError));
+      return false;
+    }
+    router.replace('/');
+    return true;
+  }, [signIn, router]);
 
   /* ── Step 1: who are you? ─────────────────────────────────────────────── */
 
   const identify = useCallback(async () => {
-    if (!isLoaded || busy) {
+    if (busy) {
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      const attempt = await signIn.create({ identifier: email.trim() });
-
-      if (attempt.status === 'complete') {
-        // Possible when the instance is configured for a passwordless link and
-        // the session was already established.
-        await finish(attempt.createdSessionId);
+      // Core 3 RETURNS errors rather than throwing them. A `try` that only
+      // caught would silently treat "no such account" as success and advance
+      // the user to a password field for an account that does not exist, so
+      // every call checks the returned error before reading status.
+      const { error: createError } = await signIn.create({ identifier: email.trim() });
+      if (createError !== null) {
+        setError(clerkMessage(createError));
         return;
       }
 
-      const factors = attempt.supportedFirstFactors ?? [];
+      if (signIn.status === 'complete') {
+        // Possible when the instance is configured for a passwordless link and
+        // the session was already established.
+        await finish();
+        return;
+      }
+
+      const factors = signIn.supportedFirstFactors;
       const hasPassword = factors.some((f) => f.strategy === 'password');
       const emailFactor = factors.find(
         (f): f is Extract<typeof f, { strategy: 'email_code'; emailAddressId: string }> =>
@@ -132,10 +172,13 @@ export default function SignInScreen() {
       }
 
       if (emailFactor !== undefined) {
-        await signIn.prepareFirstFactor({
-          strategy: 'email_code',
+        const { error: sendError } = await signIn.emailCode.sendCode({
           emailAddressId: emailFactor.emailAddressId,
         });
+        if (sendError !== null) {
+          setError(clerkMessage(sendError));
+          return;
+        }
         setStep({ kind: 'code', sentTo: emailFactor.safeIdentifier });
         return;
       }
@@ -150,28 +193,37 @@ export default function SignInScreen() {
             `app does not handle yet. Sign in on the dashboard, or ask a club admin.`,
       );
     } catch (e) {
+      // Still reachable: a returned error covers Clerk saying no, a thrown one
+      // covers never having asked it — no signal at the ground, DNS, TLS.
       setError(clerkMessage(e));
     } finally {
       setBusy(false);
     }
-  }, [isLoaded, busy, signIn, email, finish]);
+  }, [busy, signIn, email, finish]);
 
   /* ── Step 2a: password ────────────────────────────────────────────────── */
 
   const submitPassword = useCallback(async () => {
-    if (!isLoaded || busy) {
+    if (busy) {
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      const attempt = await signIn.attemptFirstFactor({ strategy: 'password', password });
-      if (attempt.status === 'complete') {
-        await finish(attempt.createdSessionId);
+      const { error: passwordError } = await signIn.password({
+        identifier: email.trim(),
+        password,
+      });
+      if (passwordError !== null) {
+        setError(clerkMessage(passwordError));
+        return;
+      }
+      if (signIn.status === 'complete') {
+        await finish();
         return;
       }
       setError(
-        `This account needs another step to sign in (${attempt.status}). Finish it on the ` +
+        `This account needs another step to sign in (${signIn.status}). Finish it on the ` +
           `dashboard, then come back.`,
       );
     } catch (e) {
@@ -179,48 +231,55 @@ export default function SignInScreen() {
     } finally {
       setBusy(false);
     }
-  }, [isLoaded, busy, signIn, password, finish]);
+  }, [busy, signIn, email, password, finish]);
 
   /* ── Step 2b: emailed code ────────────────────────────────────────────── */
 
   const sendCode = useCallback(async () => {
-    if (!isLoaded || busy || emailFactorId === null) {
+    if (busy || emailFactorId === null) {
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      await signIn.prepareFirstFactor({
-        strategy: 'email_code',
+      const { error: sendError } = await signIn.emailCode.sendCode({
         emailAddressId: emailFactorId,
       });
+      if (sendError !== null) {
+        setError(clerkMessage(sendError));
+        return;
+      }
       setStep({ kind: 'code', sentTo: email.trim() });
     } catch (e) {
       setError(clerkMessage(e));
     } finally {
       setBusy(false);
     }
-  }, [isLoaded, busy, signIn, emailFactorId, email]);
+  }, [busy, signIn, emailFactorId, email]);
 
   const submitCode = useCallback(async () => {
-    if (!isLoaded || busy) {
+    if (busy) {
       return;
     }
     setError(null);
     setBusy(true);
     try {
-      const attempt = await signIn.attemptFirstFactor({ strategy: 'email_code', code });
-      if (attempt.status === 'complete') {
-        await finish(attempt.createdSessionId);
+      const { error: verifyError } = await signIn.emailCode.verifyCode({ code: code.trim() });
+      if (verifyError !== null) {
+        setError(clerkMessage(verifyError));
         return;
       }
-      setError(`That code was accepted but the account needs another step (${attempt.status}).`);
+      if (signIn.status === 'complete') {
+        await finish();
+        return;
+      }
+      setError(`That code was accepted but the account needs another step (${signIn.status}).`);
     } catch (e) {
       setError(clerkMessage(e));
     } finally {
       setBusy(false);
     }
-  }, [isLoaded, busy, signIn, code, finish]);
+  }, [busy, signIn, code, finish]);
 
   const onSSO = useCallback(
     async (option: SSOOption) => {
@@ -463,19 +522,36 @@ function Field({ label, ...props }: React.ComponentProps<typeof TextInput> & { l
 }
 
 /**
- * Clerk errors arrive as `{ errors: [{ message, longMessage }] }`.
+ * A message for a person, from either error shape Clerk now produces.
+ *
+ * Core 3 RETURNS a `ClerkError` — a real Error subclass with `message`,
+ * `longMessage` and `code` — from the sign-in methods. The SSO flow still
+ * throws the older `{ errors: [{ message, longMessage }] }` shape, so both are
+ * handled rather than one being assumed.
  *
  * `longMessage` is the one written for a person; `message` is the short form.
- * Prefer the long one, and never fall through to `String(e)` — a stringified
- * network error on a sign-in screen reads as the app being broken rather than
- * the connection being absent.
+ * Never fall through to `String(e)` — a stringified network error on a sign-in
+ * screen reads as the app being broken rather than the connection being absent,
+ * which at a ground with no signal is precisely the wrong thing to tell someone.
  */
 function clerkMessage(e: unknown): string {
+  // Core 3's ClerkError. Identified structurally rather than with `instanceof`,
+  // which breaks across duplicated copies of the package in a bundle.
+  const direct = e as { clerkError?: boolean; message?: string; longMessage?: string };
+  if (direct?.clerkError === true) {
+    const text = direct.longMessage ?? direct.message;
+    if (text !== undefined && text.length > 0) {
+      return text;
+    }
+  }
+
+  // The older thrown shape, still used by the SSO flow.
   const errors = (e as { errors?: Array<{ message?: string; longMessage?: string }> })?.errors;
   const first = errors?.[0];
   if (first !== undefined) {
     return first.longMessage ?? first.message ?? 'That did not work. Check your details.';
   }
+
   return 'Could not reach RiseUp. Check your connection and try again.';
 }
 

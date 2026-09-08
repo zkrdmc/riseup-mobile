@@ -29,7 +29,7 @@ this is recorded so the PRD can be corrected rather than rediscovered.
 ## 2. `POST /auth/device` and `POST /auth/refresh` are not needed
 
 PRD §8.2 specifies them. The backend authenticates with Clerk
-(`security/clerk_auth.py`), and `@clerk/clerk-expo` already provides
+(`security/clerk_auth.py`), and `@clerk/expo` already provides
 device-bound sessions with silent refresh, persisted to the iOS Keychain and
 Android EncryptedSharedPreferences. The app uses that.
 

@@ -6,12 +6,20 @@
  * recreated on every render is a cache that never hits.
  */
 
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createContext, use, useMemo, useRef, type ReactNode } from 'react';
 
 import { ApiClient } from './client';
-import { ApiError } from './errors';
+import { ApiError, OfflineError } from './errors';
+
+/**
+ * Clerk's code for "the device has no connection", raised by `getToken()`
+ * since Core 3. Copied rather than imported: `ClerkOfflineError` is not on
+ * @clerk/expo's public export surface, and reaching into a subpath of a
+ * transitive dependency to get it would break on any patch release.
+ */
+const CLERK_OFFLINE_CODE = 'clerk_offline';
 
 const ApiContext = createContext<ApiClient | null>(null);
 
@@ -81,7 +89,36 @@ export function ApiProvider({ baseUrl, children }: { baseUrl: string; children: 
         // Clerk's default JWT TTL is 60 seconds, so this is called per
         // request. `getToken()` returns the cached token until it is close to
         // expiry and refreshes silently otherwise.
-        getToken: () => getTokenRef.current(),
+        //
+        // ══════════════════════════════════════════════════════════════════
+        //  CORE 3 THROWS WHEN OFFLINE. IT USED TO RETURN NULL.
+        // ══════════════════════════════════════════════════════════════════
+        // This is the one Core 3 change that actually reaches this app, and
+        // it lands on the path §3 says is the normal one. Before, a token
+        // that could not be refreshed at a ground with no signal came back
+        // null, the request went out unauthenticated, and the fetch failed
+        // into `OfflineError` — the state every screen already renders.
+        //
+        // Now Clerk raises `ClerkOfflineError` from `getToken()` itself,
+        // BEFORE the request is built. Left alone it escapes as an unknown
+        // error: React Query would retry it as though it were a bug, and the
+        // screen would show a Clerk internal message instead of "no
+        // connection". So it is translated at the boundary into the app's own
+        // offline error, which is what it means.
+        //
+        // Matched on `code` rather than `instanceof`: two copies of
+        // @clerk/shared in one bundle give two distinct classes, and the
+        // check would quietly start failing.
+        getToken: async () => {
+          try {
+            return await getTokenRef.current();
+          } catch (e) {
+            if ((e as { code?: string })?.code === CLERK_OFFLINE_CODE) {
+              throw new OfflineError();
+            }
+            throw e;
+          }
+        },
       }),
     [baseUrl],
   );

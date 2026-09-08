@@ -16,7 +16,7 @@
  * without asking a volunteer to describe a stack trace. Recorded as a gap.
  */
 
-import { useAuth } from '@clerk/clerk-expo';
+import { useAuth } from '@clerk/expo';
 import { useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Pressable, StyleSheet, TextInput } from 'react-native';

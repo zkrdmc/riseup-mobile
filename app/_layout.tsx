@@ -8,7 +8,7 @@
  * logging you out and back in.
  */
 
-import { ClerkProvider, useAuth } from '@clerk/clerk-expo';
+import { ClerkProvider, useAuth } from '@clerk/expo';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
@@ -66,7 +66,35 @@ export default function RootLayout() {
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: surface.bg0 }}>
       <SafeAreaProvider>
-        <ClerkProvider publishableKey={config.clerkPublishableKey} tokenCache={tokenCache}>
+        {/* ══════════════════════════════════════════════════════════════════
+            WHY THIS APP DOES NOT SHIP CLERK'S NATIVE COMPONENTS
+            ══════════════════════════════════════════════════════════════════
+            `@clerk/expo` ships an autolinked native module — `ClerkExpo.podspec`
+            — whose deployment target is `:ios => '17.0'`, because the Clerk iOS
+            SDK behind its SwiftUI sign-in components requires iOS 17. Linked,
+            it drags the whole app's floor from Expo SDK 57's own 16.4 up to
+            17.0, and every iPhone on iOS 16 stops being able to install RiseUp.
+
+            The clubs this is built for share handsets and keep them for years.
+            Cutting off iOS 16 to gain a pre-built sign-in screen we do not use
+            — `app/(auth)/sign-in.tsx` is our own, and has to be, because it
+            reads `supportedFirstFactors` and offers an emailed code — is a bad
+            trade in the wrong direction.
+
+            So `package.json` excludes `@clerk/expo` from Expo autolinking, and
+            this flag tells the provider not to mount the JS↔native client sync
+            that the absent module would back. Everything we actually use —
+            `useAuth`, `useUser`, `useSignIn`, `useSSO`, `useOrganizationList`,
+            the token cache — is JavaScript against clerk-js and unaffected.
+
+            The day we want Clerk's native components, the cost is explicit:
+            drop the exclude, add `"@clerk/expo"` to `plugins` in app.json, and
+            accept iOS 17 as the floor. */}
+        <ClerkProvider
+          publishableKey={config.clerkPublishableKey}
+          tokenCache={tokenCache}
+          __experimental_disableNativeClientSync
+        >
           <ApiProvider baseUrl={config.apiUrl}>
             {/* Inside Clerk because it reads the signed-in user to sync the
                 choice to the account, and above the router so every screen

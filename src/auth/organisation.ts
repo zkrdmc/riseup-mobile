@@ -33,7 +33,7 @@
  * product whose accounts are provisioned by an administrator.
  */
 
-import { useAuth, useOrganizationList } from '@clerk/clerk-expo';
+import { useAuth, useOrganizationList } from '@clerk/expo';
 import { useEffect, useRef, useState } from 'react';
 
 export interface ClubOption {

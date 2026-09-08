@@ -255,6 +255,41 @@ plain Node — no Metro, no device, no React. The geometry it covers is a port o
 `camera/rig.py` in `riseup-ml` and the thresholds are product decisions, so it
 is the one part of this app that must not drift silently from the server.
 
+### Do not add `@clerk/expo` to `plugins`, and leave the autolinking exclude alone
+
+`package.json` contains this, and it is load-bearing:
+
+```json
+"expo": { "autolinking": { "exclude": ["@clerk/expo"] } }
+```
+
+`@clerk/expo` ships an autolinked native module whose podspec reads
+`:ios => '17.0'` — the Clerk iOS SDK behind its pre-built SwiftUI sign-in
+components requires iOS 17. Link it and the whole app's deployment target goes
+from Expo SDK 57's own **16.4 to 17.0**, and every iPhone still on iOS 16 can no
+longer install RiseUp. Clerk's config plugin does the same thing from the other
+direction: it rewrites `ios.deploymentTarget` to 17.0 in
+`Podfile.properties.json` on prebuild.
+
+We do not use those components. `app/(auth)/sign-in.tsx` is our own screen and
+has to be — it reads `supportedFirstFactors` off the account and offers an
+emailed code, which is the right interaction for someone on a touchline in the
+rain. Everything the app touches (`useAuth`, `useUser`, `useSignIn`, `useSSO`,
+`useOrganizationList`, the token cache) is JavaScript against clerk-js and works
+with the module excluded; `ClerkProvider` is passed
+`__experimental_disableNativeClientSync` so it does not mount sync machinery for
+a module that is not there.
+
+Check it after any Clerk upgrade:
+
+```bash
+npx expo-modules-autolinking resolve -p apple --json   # @clerk/expo must NOT appear
+```
+
+Wanting the native components later is a fair decision, but it is not a free
+one: drop the exclude, add `"@clerk/expo"` to `plugins` in `app.json`, and
+accept iOS 17 as the floor.
+
 ---
 
 ## How it is organised
