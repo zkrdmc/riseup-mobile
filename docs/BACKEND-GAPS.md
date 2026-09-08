@@ -287,6 +287,53 @@ indistinguishable downstream from a measured one. `catalogue.ts` defines
 support by capability class instead, which is honest and needs no data we do
 not have.
 
+### There is already a calibration home in Postgres, and it is venue-keyed
+
+`riseup-backend/migrations/007_pitches_and_cameras.sql` creates `venue_cameras`,
+`UNIQUE(venue_id, camera_id)`, with a `-- Calibration` block holding `h_matrix`,
+`calibrated_at`, `calibrated_length_m` and `calibrated_width_m`. Its header
+already argues the case correctly for the homography:
+
+> A homography maps THIS camera's image plane onto the ground. It is a property
+> of a viewpoint, not of a rectangle of grass.
+
+Lens distortion is a property of neither. It belongs to the **optics** — body
+plus resolution plus zoom — and three things follow that make `venue_cameras`
+the wrong row for it:
+
+**They have different lifetimes.** Move the camera and its homography is dead
+while its lens model is untouched. Carrying the club camcorder to an away
+fixture invalidates the viewpoint and changes nothing about the glass. Keyed by
+venue, that same camcorder needs calibrating once per ground — which is the
+per-match cost §4.3 exists to remove, reintroduced through the schema.
+
+**One row cannot hold the several answers a camera has.** A camera has one lens
+model per resolution and zoom, because a 4K mode is often a sensor crop while
+1080p is a scale of it. `UNIQUE(venue_id, camera_id)` gives one row per camera.
+This is the same failure 007's own header uses to justify splitting pitches out
+of `venues`: "One row cannot hold two answers, and the wrong answer here is not
+cosmetic."
+
+**`venue_cameras` models an installed camera.** `protocol`, `stream_url_enc`,
+`access_enabled`, access windows — a fixed camera someone negotiated a pull
+from. A phone in a coach's pocket, or a camcorder that travels, has no venue
+and no stream, and would need a synthetic venue row to be storable at all.
+
+So: a club-scoped lens table, one row per `(camera, width_px, height_px,
+zoom_ratio)`, mirroring `LensCalibration` in `src/capture/devices/types.ts`
+(`method`, `camera_matrix`, `distortion`, `rms_reprojection_error`,
+`edge_bow_px`, `solved_at`, `app_version`). `venue_cameras` then gains a
+nullable reference to the lens row a homography was solved under — undistorting
+with the wrong coefficients silently biases the homography, and
+`calibrated_length_m` already sets the precedent of recording what a
+calibration assumed.
+
+**The session must snapshot the coefficients, not reference them.** A reference
+means re-calibrating the camcorder in March retroactively changes how
+February's match was interpreted, with nothing anywhere reporting a change. The
+job carries the numbers it actually used, the same way it already carries the
+pitch dimensions it was solved against.
+
 ---
 
 ## 14. App store compliance needs two things that are not in this repo
