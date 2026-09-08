@@ -14,7 +14,14 @@
  * decides whether a camera works is a handful of capabilities, and those can
  * be stated honestly:
  *
- *   1. It holds still.            A moving camera has no fixed homography.
+ *   1. Its optical centre stays put. NOT "it does not move" — that was the
+ *                                 wrong line. A camera panning on a tripod
+ *                                 rotates about a fixed centre, and pure
+ *                                 rotation keeps the pitch solvable frame by
+ *                                 frame from the lines in view. What breaks it
+ *                                 is the centre TRANSLATING: handheld, walking,
+ *                                 airborne. Rotation is recoverable, parallax
+ *                                 is not.
  *   2. Its lens can be modelled.  One radial parameter over the frame.
  *   3. It can stop adjusting.     Focus, exposure and stabilisation lockable.
  *   4. It records enough pixels.  A player at the far touchline must be
@@ -104,13 +111,27 @@ export const CAMERA_CLASSES: readonly CameraClass[] = [
     ],
   },
   {
+    id: 'panned_tripod',
+    label: 'Phone or camera on a tripod, panned',
+    summary: 'One camera, an operator turning it to follow play.',
+    tier: 'supported_after_calibration',
+    kind: 'external',
+    requirements: [
+      'On a tripod or a rig head — the camera turns, it does not travel',
+      'Zoom fixed for the whole match, and calibrated at that setting',
+      'Manual focus and locked exposure, as with any other camera',
+      'Keep a touchline or a penalty box in shot while you pan — the picture has to stay ' +
+        'anchored to something known',
+    ],
+  },
+  {
     id: 'fixed_installed',
     label: 'Fixed camera at the ground',
     summary: 'A camera already installed on a stand or a mast.',
     tier: 'supported_after_calibration',
     kind: 'external',
     requirements: [
-      'It must not pan, tilt or zoom during the match',
+      'It must not be moved or re-zoomed during the match — panning is fine, walking it is not',
       'Lens calibrated from the pitch lines, since a board cannot be held up to it',
     ],
   },
@@ -148,9 +169,10 @@ export const CAMERA_CLASSES: readonly CameraClass[] = [
     tier: 'unsupported',
     kind: 'external',
     unsupportedReason:
-      'Everything downstream assumes the camera does not move. A drone holding position still ' +
-      'drifts by metres, and every player position drifts with it. A drone on the ground, ' +
-      'filming as a fixed camera, is fine — pick "Fixed camera at the ground".',
+      'A drone holding position still drifts by metres, and because the camera itself travels, ' +
+      'every player position travels with it — that is different from panning, where the camera ' +
+      'turns on the spot and the maths still works. A drone on the ground, filming from a fixed ' +
+      'point, is fine: pick "Phone or camera on a tripod, panned".',
     requirements: [],
   },
   {
@@ -160,8 +182,10 @@ export const CAMERA_CLASSES: readonly CameraClass[] = [
     tier: 'unsupported',
     kind: 'external',
     unsupportedReason:
-      'Handheld footage has no fixed view of the pitch, so distances cannot be measured from ' +
-      'it. It is still worth uploading as a clip for watching — it just cannot be analysed.',
+      'Handheld means the camera drifts as well as turns, and a few centimetres of sway between ' +
+      'frames moves every player on the far side by metres. A tripod fixes that even if you pan ' +
+      'constantly — it is the drifting, not the turning, that cannot be undone. Put it on ' +
+      'something and pick "Phone or camera on a tripod, panned".',
     requirements: [],
   },
   {

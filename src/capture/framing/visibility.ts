@@ -171,9 +171,23 @@ const MAX_GAP_M_ADVISORY = 25;
 const MIN_HULL_COVERAGE_BLOCKING = 0.35;
 const MIN_HULL_COVERAGE_ADVISORY = 0.6;
 
+/**
+ * How the camera is being used, because it changes what "enough" means.
+ *
+ * `fixed`  — bolted down for the whole match. It has to cover its region in
+ *            one view, so the coverage checks apply.
+ * `panned` — an operator turning it to follow play. It never sees the whole
+ *            region at once and is not expected to: what matters is that at
+ *            EVERY instant enough of the pitch is in shot to place the frame.
+ *            Judging a panned camera against whole-region coverage fails a
+ *            correctly operated rig on every frame.
+ */
+export type CameraMode = 'fixed' | 'panned';
+
 export function assessVisibility(
   visible: Landmark[],
   roi: RegionOfInterest | null = null,
+  mode: CameraMode = 'fixed',
 ): VisibilityReport {
   const count = visible.length;
   const points = visible.map((l) => ({ x: l.x, y: l.y }));
@@ -268,7 +282,11 @@ export function assessVisibility(
   // Coverage of the region actually being measured. After the extent checks,
   // because a view can pass every one of them and still leave a hole where the
   // play is — the failure hull area cannot see.
-  if (coverage !== null && count >= 3) {
+  // Coverage of the region is a FIXED-camera question. A panned camera is
+  // judged on whether the current view can be placed at all, which is the
+  // count, spread and conditioning above — it is supposed to be looking at a
+  // fraction of its region, and failing it for that would fail every frame.
+  if (mode === 'fixed' && coverage !== null && count >= 3) {
     if (coverage.worstGapM > MAX_GAP_M_BLOCKING) {
       issues.push({
         code: 'COVERAGE_GAP',
@@ -307,6 +325,20 @@ export function assessVisibility(
           `area. The rest is extrapolated, and less accurate.`,
       });
     }
+  }
+
+  // The live risk while panning: swinging onto open grass with no marking in
+  // shot. The frame then cannot be placed at all, and the gap is invisible on
+  // the footage — it looks like perfectly good video of a passage of play.
+  if (mode === 'panned' && count >= MIN_LANDMARKS_BLOCKING && count < MIN_LANDMARKS_ADVISORY) {
+    issues.push({
+      code: 'PANNED_THIN_ANCHORS',
+      blocking: false,
+      message:
+        `Only ${count} markings are in shot. That is enough right now, but swing much further ` +
+        `and there will be nothing to place the picture against. Keep a touchline or a penalty ` +
+        `box in view as you follow the play.`,
+    });
   }
 
   return {

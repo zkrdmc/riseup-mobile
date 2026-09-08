@@ -312,3 +312,53 @@ Worth adding as well, though neither store requires it:
 and a form that submits over the network cannot carry "I could not sign in". A
 server endpoint alongside it would let a report carry logs instead of asking a
 volunteer to describe a stack trace.
+
+---
+
+## 15. Segments should be chunks, not halves — and that changes gap 6
+
+PRD §8.2 defines `POST /capture/sessions/{id}/segments` as "register a segment
+(half) per device" — two per device, uploaded after the match. §5 then accepts
+the consequence: "a 36 GB pair over club Wi-Fi is an overnight job".
+
+The better design is a segment every few minutes, uploaded DURING the match and
+reassembled server-side. It is worth writing down because it dissolves three
+separate problems at once:
+
+**It removes the storage cliff.** The §4.4 preflight demands 20 GB free because
+a device that fills mid-match "takes the half with it". With chunks confirmed
+and deleted as they land, the phone holds a couple of minutes of video rather
+than a half, and running out of space stops being the failure that ends a
+match.
+
+**It removes the resumability problem.** Gap 6 says a presigned PUT has no byte
+range, so an 18 GB upload interrupted at 90% restarts at zero, and multipart is
+needed. A five-minute chunk is a few hundred megabytes — small enough that
+restarting one is a minor cost rather than a lost evening. The chunk boundary
+IS the resume point, and multipart stops being necessary.
+
+**It removes the overnight job.** Upload spreads across the ninety minutes the
+match is already taking.
+
+What it needs from the backend:
+
+```
+POST /capture/sessions/{id}/segments        # register chunk n, get a presigned PUT
+POST /capture/sessions/{id}/segments/{n}/uploaded
+GET  /capture/sessions/{id}                 # which chunks have landed
+POST /capture/sessions/{id}/complete        # reassemble, then enqueue
+```
+
+Reassembly is the new server-side work, and the ordering matters: chunks arrive
+out of order over a lossy connection, so `complete` must verify the set is
+contiguous before concatenating. A missing chunk 7 discovered at reassembly is
+recoverable — the phone still has it if deletion is gated on confirmation —
+whereas a silent gap concatenated into a continuous file is a match with two
+minutes missing from the middle and nothing saying so.
+
+**The tension to design against: §3 says the ground has no reliable signal.**
+Chunked upload assumes a connection the PRD explicitly says may not exist. So
+the phone must record locally regardless and upload opportunistically, the
+preflight free-space gate stays at full-match worst case, and deletion stays
+gated on server-side confirmation (§5). Chunking is what makes a good
+connection pay off during the match; it must not become a dependency on one.
