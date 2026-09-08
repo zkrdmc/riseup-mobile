@@ -206,6 +206,30 @@ The guidance the check produces is already actionable ("the overlap band is
 7 m, below the 12 m needed to hand identity across it — angle the phones toward
 each other") and should be surfaced close to verbatim.
 
+**Two phones that are not the same phone.** Clubs will not reliably own a
+matched pair, so the app must handle a mismatched rig as a normal case rather
+than an error (main PRD §3.0.10). Three things follow for this screen:
+
+- **Do not require matching resolutions.** Record each device at the best it
+  offers. Fusion weights each camera by its own geometry, so a better camera is
+  preferred automatically wherever both can see; nothing needs configuring.
+
+- **Name the weak half.** When the resolution check fails on a mixed rig, the
+  shortfall belongs to one camera and moving the mount will not fix it.
+  `RigReport.worst_camera` says which. The screen must offer the remedy that
+  works — *"swap the phones so the better camera covers the far end"* — and
+  must not show the placement advice, which is correct only for a matched rig
+  that is badly positioned.
+
+- **Offer the swap as an action, not as text.** The operator is on a ladder
+  holding two phones. "Assign this device to the other end" should be one tap
+  that exchanges the roles, then re-runs the check.
+
+Where the two devices differ, the app shall recommend aiming the **better**
+camera at the half the analyst cares about, and state plainly that the other
+half will be weaker. A mismatched rig is still worth recording — it is strictly
+better than one camera — but the operator should know what they are getting.
+
 **Setup guidance to build the screen around** (measured, PRD §3.0.1):
 
 - Mount at the halfway line, **~30 m back**, as high as available.
