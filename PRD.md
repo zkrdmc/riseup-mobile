@@ -77,25 +77,39 @@ most likely thing to be forgotten during implementation.
 This is PRD §3.0.2 rendered as a user flow. It is the majority of the
 engineering.
 
-### 4.0 Two configurations, not one
+### 4.0 Configurations, not one
 
-Everything below assumed two fixed phones. There are two supported setups, and
-the difference runs through framing, preflight and processing:
-
-**Two phones, fixed.** The rig of PRD §3.0.1. Both bolted down for the match,
-each covering a half with an overlap band between them. The only configuration
-that clears the ~40 px detection floor in the far third (~47 px measured), and
-therefore the only one that supports the full quality claim.
+The app supports a rig of **any size, built from any cameras** (PRD §3.0.11).
+What changes between configurations is the quality claim, and that difference
+runs through framing, preflight and processing:
 
 **One camera, panned by an operator.** A phone or camera on a tripod, turned to
 follow play. Lower angular resolution — a single 4K camera covering the pitch
 sits at ~20 px on the worst player, below the detection floor — so the far
-third degrades. It is supported because it is what most clubs can actually
-staff, and because it is a real product for the near and middle thirds.
+third degrades. Supported because it is what most clubs can actually staff, and
+because it is a real product for the near and middle thirds.
 
-**Say which one produced a result.** A single-camera match and a rig match are
-not the same measurement, and a summary that presents them identically invites
-a coach to compare them. The data-quality banner in §7 is where that belongs.
+**Two phones, fixed.** The rig of PRD §3.0.1. Both bolted down for the match,
+each covering a half with an overlap band between them. ~47 px on the worst
+player, clearing the ~40 px detection floor, and the configuration the full
+quality claim was written against.
+
+**Three or more, or better cameras.** Each camera added divides the angle the
+rig must span, so each can use a longer lens and every player gets bigger. Three
+cameras with 30° lenses reach ~101 px — past the ~80 px jersey numbers need
+(PRD §3.0.11). The app should not treat two as the maximum, and the framing
+assistant is where that shows.
+
+**Say which one produced a result.** A one-camera match, a two-phone match and a
+four-camera match are not the same measurement, and a summary that presents them
+identically invites a coach to compare them. The data-quality banner in §7 is
+where that belongs.
+
+**Cameras need not be phones.** A club's fixed camera, a borrowed camcorder or
+an action camera are all usable, and the longer lenses that make a three-camera
+rig worthwhile are easier to find on real cameras than on phones. A non-phone
+body reports no distortion coefficients, so it needs the lens survey of §4.3
+before it can be used at all.
 
 #### What "moving" means, precisely
 
@@ -206,9 +220,27 @@ The guidance the check produces is already actionable ("the overlap band is
 7 m, below the 12 m needed to hand identity across it — angle the phones toward
 each other") and should be surfaced close to verbatim.
 
-**Two phones that are not the same phone.** Clubs will not reliably own a
-matched pair, so the app must handle a mismatched rig as a normal case rather
-than an error (main PRD §3.0.10). Three things follow for this screen:
+**A rig is N cameras, not two.** The screen must scale to three, four or five
+without becoming a different screen (main PRD §3.0.11):
+
+- **Check every junction, not "the overlap".** A rig of four has three
+  junctions, and identity has to walk the whole rig — one gap stops it wherever
+  it is. `RigReport.seams` carries one entry per junction between spatially
+  consecutive cameras, and the overlay must show which junction is weak, not a
+  single rig-wide number.
+
+- **Cameras arrive in whatever order they are switched on.** Spatial order is
+  solved from the coverage, not asked for. The operator should never be told to
+  plug cameras in "left to right".
+
+- **Adding a camera is a resolution decision, not a coverage one.** Two cameras
+  already cover the pitch. The screen should say what a third BUYS — a longer
+  lens on each, so a bigger player in the far corner — because "you already have
+  coverage" is the wrong reason to stop at two.
+
+**Cameras that are not the same camera.** Clubs will not reliably own a matched
+set, so the app must handle a mismatched rig as a normal case rather than an
+error (main PRD §3.0.10). Three things follow for this screen:
 
 - **Do not require matching resolutions.** Record each device at the best it
   offers. Fusion weights each camera by its own geometry, so a better camera is
@@ -225,10 +257,15 @@ than an error (main PRD §3.0.10). Three things follow for this screen:
   holding two phones. "Assign this device to the other end" should be one tap
   that exchanges the roles, then re-runs the check.
 
-Where the two devices differ, the app shall recommend aiming the **better**
-camera at the half the analyst cares about, and state plainly that the other
-half will be weaker. A mismatched rig is still worth recording — it is strictly
+Where the devices differ, the app shall recommend aiming the **better** camera
+at the part of the pitch the analyst cares about, and state plainly that the
+rest will be weaker. A mismatched rig is still worth recording — it is strictly
 better than one camera — but the operator should know what they are getting.
+
+On a rig of three or more, a deliberately mixed set (a wide camera holding the
+whole pitch, longer ones on the corners) is a reasonable design rather than a
+mistake. The check advises above two cameras instead of blocking, and the screen
+should follow it: warn, do not refuse.
 
 **Setup guidance to build the screen around** (measured, PRD §3.0.1):
 
