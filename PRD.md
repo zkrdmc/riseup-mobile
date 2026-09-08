@@ -77,6 +77,72 @@ most likely thing to be forgotten during implementation.
 This is PRD §3.0.2 rendered as a user flow. It is the majority of the
 engineering.
 
+### 4.0 Two configurations, not one
+
+Everything below assumed two fixed phones. There are two supported setups, and
+the difference runs through framing, preflight and processing:
+
+**Two phones, fixed.** The rig of PRD §3.0.1. Both bolted down for the match,
+each covering a half with an overlap band between them. The only configuration
+that clears the ~40 px detection floor in the far third (~47 px measured), and
+therefore the only one that supports the full quality claim.
+
+**One camera, panned by an operator.** A phone or camera on a tripod, turned to
+follow play. Lower angular resolution — a single 4K camera covering the pitch
+sits at ~20 px on the worst player, below the detection floor — so the far
+third degrades. It is supported because it is what most clubs can actually
+staff, and because it is a real product for the near and middle thirds.
+
+**Say which one produced a result.** A single-camera match and a rig match are
+not the same measurement, and a summary that presents them identically invites
+a coach to compare them. The data-quality banner in §7 is where that belongs.
+
+#### What "moving" means, precisely
+
+The constraint is not that the camera must be still. It is that its **optical
+centre must not translate**.
+
+- **Panning is fine.** A camera turning on a tripod rotates about a fixed
+  point. That is pure rotation, and the pitch stays solvable frame by frame
+  from the lines in view.
+- **Drifting is not.** Handheld, walking, airborne. A few centimetres of
+  parallax between frames moves a player on the far side of the pitch by
+  metres, and nothing downstream can undo it.
+
+Rotation is recoverable; parallax is not. Every camera rule in the app follows
+from that one sentence.
+
+#### Notes for the physical rig
+
+For the single-camera panned setup, a rig assisting the operator has three
+constraints that are expensive to retrofit:
+
+- **Put the pan axis over the optical centre**, not behind it. A head that
+  rotates the camera about a point 10 cm behind the lens translates the centre
+  as it turns, which reintroduces exactly the parallax that makes handheld
+  footage unusable. This is the single most important mechanical requirement
+  and it is invisible in the footage.
+
+- **Pan only. No tilt, no roll, no height change during a match.** Tilt is
+  recoverable in principle and doubles the calibration burden in practice;
+  roll is worse. One axis keeps the solve cheap and keeps the operator's job
+  to one motion.
+
+- **Constrain the pan rate.** A fast swing produces rolling-shutter shear
+  across the frame — the sensor reads top to bottom while the scene moves —
+  which distorts player positions in a way that is systematic, not noise, and
+  looks like nothing on playback. A damped head that resists fast movement is
+  doing measurement work, not just making the footage look nicer.
+
+- **The mount must not creep.** A head that drifts a degree over ninety
+  minutes moves the far touchline by metres. Whatever locks the height and the
+  tilt has to hold under its own weight for the full match.
+
+Height and distance follow §3.0.1 unchanged: about 30 m back, as high as
+available. Below ~20 m the geometry fails for a rig; for a single panned
+camera it fails differently — the camera cannot reach the far corners without
+a pan so wide that the pitch leaves frame entirely.
+
 ### 4.1 Pairing and roles
 
 - Two devices pair locally over Bluetooth/local network — **not** through the
@@ -279,6 +345,56 @@ two halves become two segments of one session.
   committed to filming a whole match with a rig, and is likely the most-used
   feature in the first month.
     
+
+### 5.1 Chunked upload — signing and reassembly
+
+Upload is not a job that starts when the match ends. Video is cut into short
+segments and sent **during play**, so the phone never holds more than a couple
+of minutes at a time and a 90-minute match cannot die at minute 70 because
+storage ran out. The full recording is reconstructed in storage on arrival;
+analysis runs when the operator stops.
+
+That means segments arrive out of order, and the server has to put them back
+together with certainty rather than hope.
+
+**Not a visual watermark.** The instinct is to burn a marker into the picture.
+It must not be done: these frames *are* the measurement. A burned-in marker
+occludes whatever is behind it, and near the far touchline it occludes players
+at exactly the scale — around 40 px tall — where detection is already marginal.
+It also does not survive re-encoding faithfully and cannot be verified without
+decoding video.
+
+**A signed manifest instead.** Every chunk carries, in its upload and in its own
+container metadata:
+
+| Field | Why |
+| --- | --- |
+| `sessionId`, `deviceId`, `role` | Which match, which camera. Prevents two matches being spliced. |
+| `sequence` | 0-based, monotonic. What the server sorts on. |
+| `startPtsNs`, `endPtsNs` | On a clock running for the **whole session**, not restarting per chunk. |
+| `frameCount` | Cross-checks duration against frame rate. |
+| `sha256`, `byteLength` | Integrity, and the chain of custody the backend already computes for whole uploads. |
+| `final` | Set on the last chunk. Distinguishes "the match ended" from "the phone went into a tunnel". |
+
+**Ordering is the easy half. Continuity is the half that bites.** Out-of-order
+arrival is not really the problem — every chunk knows its index. What an index
+cannot tell you is whether the chunks actually *join up*. A chunk can carry the
+right sequence number and still be short: dropped frames at a boundary, a late
+encoder flush, thermal throttling. Sorted by index you get 0, 1, 2, 3 with a
+hole between 1 and 2 that nothing in the numbering reveals. Concatenated, that
+is a match with four seconds missing from the middle, no error raised anywhere,
+and a possession sequence that appears to teleport.
+
+So the check is that consecutive chunks **abut in time**, within a tolerance
+well under one frame — contiguity in time, not just in index.
+
+**Verified twice, on purpose.** On the phone before the session is completed,
+and on the server before anything is concatenated. The phone check is the one
+that matters: deletion is gated on confirmation, so a missing chunk found there
+can still be re-sent. A gap found only at the server is a gap nobody can fill.
+
+Implemented in `src/capture/upload/chunkManifest.ts`; see also gap 15 in
+`docs/BACKEND-GAPS.md`.
 
 ---
 

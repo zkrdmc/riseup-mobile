@@ -356,6 +356,33 @@ recoverable — the phone still has it if deletion is gated on confirmation —
 whereas a silent gap concatenated into a continuous file is a match with two
 minutes missing from the middle and nothing saying so.
 
+### The manifest that makes reassembly verifiable
+
+`src/capture/upload/chunkManifest.ts` defines the contract and implements the
+check; the backend needs to run the same one before it concatenates anything.
+Each chunk registration carries `sessionId`, `deviceId`, `role`, `sequence`,
+`startPtsNs`, `endPtsNs`, `frameCount`, `sha256`, `byteLength` and `final`.
+
+Two things about it that are easy to get wrong:
+
+**Timestamps must run on a session-wide clock, not restart per chunk.** A
+per-chunk clock starting at zero makes every chunk look like it begins where
+the last one ended, and the continuity check then passes on footage with holes
+in it.
+
+**Sequence contiguity is not enough.** A chunk can carry the right index and
+still be short — dropped frames at a boundary, a late encoder flush, thermal
+throttling. `complete` must verify consecutive chunks ABUT in time, within a
+tolerance under one frame, not merely that 0..n are all present.
+
+`final` is what separates "the match ended" from "the phone went into a
+tunnel". Without it the server either reassembles a truncated match or waits
+forever.
+
+Not a visual watermark: burning a marker into frames would occlude players at
+the far touchline at exactly the ~40 px scale where detection is already
+marginal, and these frames are the measurement.
+
 **The tension to design against: §3 says the ground has no reliable signal.**
 Chunked upload assumes a connection the PRD explicitly says may not exist. So
 the phone must record locally regardless and upload opportunistically, the

@@ -16,6 +16,7 @@ const visibility = require('../../../../.smoke/capture/framing/visibility');
 const detector = require('../../../../.smoke/capture/framing/detector');
 const pair = require('../../../../.smoke/capture/framing/pair');
 const dicts = require('../../../../.smoke/i18n/dictionaries');
+const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 
 let pass = 0;
 let fail = 0;
@@ -539,6 +540,118 @@ console.log('17. Translations');
   // in a language they cannot read has to find their way out.
   check('language names are identical in every locale', dicts.en['lang.ar'] === dicts.fr['lang.ar'] && dicts.fr['lang.ar'] === dicts.ar['lang.ar'], dicts.ar['lang.ar']);
   check('and are written in their own script', dicts.en['lang.ar'] === 'العربية');
+}
+
+console.log('');
+console.log('18. Chunk manifests — reassembly of an out-of-order upload');
+{
+  const SEC = 1e9;
+  // A four-chunk session, each 300 s, on a session-wide clock.
+  const make = (seq, opts) =>
+    Object.assign(
+      {
+        sessionId: 's1',
+        deviceId: 'd1',
+        role: 'solo',
+        sequence: seq,
+        startPtsNs: seq * 300 * SEC,
+        endPtsNs: (seq + 1) * 300 * SEC,
+        frameCount: 300 * 30,
+        sha256: 'x'.repeat(64),
+        byteLength: 1000,
+        recordedAt: '2026-09-08T15:00:00Z',
+        appVersion: '1.0.0',
+        final: false,
+      },
+      opts,
+    );
+
+  const good = [make(0), make(1), make(2), make(3, { final: true })];
+
+  // Arrival order is not sequence order — that is the whole point.
+  const shuffled = [good[2], good[0], good[3], good[1]];
+  const r = chunks.verifyChunkSet(shuffled);
+  check('out-of-order arrival reassembles', r.reassemblable, r.problems.map((p) => p.code).join(',') || 'clean');
+  check(
+    'sorted by sequence regardless of arrival',
+    r.ordered.map((c) => c.sequence).join(',') === '0,1,2,3',
+    r.ordered.map((c) => c.sequence).join(','),
+  );
+  check('total duration is the session span', r.totalDurationNs === 1200 * SEC, r.totalDurationNs / SEC + ' s');
+  check('total bytes sum', r.totalBytes === 4000);
+
+  // A chunk that never uploaded.
+  const missing = chunks.verifyChunkSet([good[0], good[1], good[3]]);
+  check('a missing chunk is refused', !missing.reassemblable);
+  check(
+    'and is named so it can be re-sent',
+    JSON.stringify(chunks.outstandingSequences(missing)) === '[2]',
+    JSON.stringify(chunks.outstandingSequences(missing)),
+  );
+
+  // THE CASE A SEQUENCE NUMBER CANNOT CATCH: every index present, in order,
+  // but chunk 1 stopped four seconds early. Concatenating loses four seconds
+  // of match with nothing raising an error.
+  const short = [make(0), make(1, { endPtsNs: (2 * 300 - 4) * SEC }), make(2), make(3, { final: true })];
+  const gap = chunks.verifyChunkSet(short);
+  check('a complete index run with a time hole is still refused', !gap.reassemblable);
+  check(
+    'and the problem is named as a time gap, not a missing chunk',
+    gap.problems.some((p) => p.code === 'TIME_GAP'),
+    gap.problems.map((p) => p.code).join(','),
+  );
+  check(
+    'the gap is measured in ms for a support answer',
+    (gap.problems.find((p) => p.code === 'TIME_GAP') || {}).message.includes('4000 ms'),
+  );
+
+  // Overlap — a retried chunk re-encoded from slightly earlier.
+  const overlap = [make(0), make(1, { startPtsNs: (300 - 2) * SEC }), make(2), make(3, { final: true })];
+  check(
+    'an overlap is refused too, not silently double-counted',
+    chunks.verifyChunkSet(overlap).problems.some((p) => p.code === 'TIME_OVERLAP'),
+  );
+
+  // Sub-frame jitter must NOT trip the gate, or every real session fails.
+  const jitter = [make(0), make(1, { startPtsNs: 300 * SEC + 1_000_000 }), make(2), make(3, { final: true })];
+  check(
+    '1 ms of encoder jitter is tolerated',
+    chunks.verifyChunkSet(jitter).reassemblable,
+    chunks.verifyChunkSet(jitter).problems.map((p) => p.code).join(',') || 'clean',
+  );
+
+  // Nothing marked final: the phone may still be recording, or may have died.
+  check(
+    'an unfinalised set is not reassembled',
+    chunks.verifyChunkSet([make(0), make(1), make(2)]).problems.some((p) => p.code === 'NOT_FINALISED'),
+  );
+
+  // Two matches must never be spliced.
+  const mixed = [make(0), Object.assign(make(1), { sessionId: 's2' }), make(2), make(3, { final: true })];
+  check(
+    'chunks from two sessions are refused',
+    chunks.verifyChunkSet(mixed).problems.some((p) => p.code === 'MIXED_SESSION'),
+  );
+
+  // A retry that was not de-duplicated.
+  check(
+    'a duplicate sequence is caught',
+    chunks.verifyChunkSet([make(0), make(1), make(1), make(2), make(3, { final: true })]).problems.some(
+      (p) => p.code === 'DUPLICATE_SEQUENCE',
+    ),
+  );
+
+  check('an empty set is refused', !chunks.verifyChunkSet([]).reassemblable);
+
+  // Keys sort lexicographically into sequence order — what somebody listing
+  // the bucket at 1 a.m. relies on.
+  const keys = [0, 2, 10, 3].map((n) => chunks.chunkObjectKey({ sessionId: 's1', role: 'A', sequence: n }));
+  const sorted = [...keys].sort();
+  check(
+    'object keys sort lexicographically into sequence order',
+    sorted[0].endsWith('00000.mp4') && sorted[1].endsWith('00002.mp4') && sorted[3].endsWith('00010.mp4'),
+    sorted[3],
+  );
 }
 
 console.log(`\n${'='.repeat(60)}`);
