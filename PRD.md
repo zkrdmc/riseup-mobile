@@ -178,6 +178,61 @@ a pan so wide that the pitch leaves frame entirely.
 explanation. This is not negotiable — a rig that cannot lock exposure produces
 a visible seam and degraded re-identification for the whole match.
 
+### 4.1a Rigs — a saved arrangement, not a per-match setup
+
+A rig is **which cameras stand where**, saved once and reused. A club bolts two
+phones to a gantry, or stands four cameras along a touchline, and films every
+home fixture from that arrangement for a season. Re-entering four mount
+positions every Saturday is exactly the per-match cost the survey work exists
+to remove — and the second volunteer to do it would enter different numbers.
+
+The backend now carries this: `club_rigs` and `club_rig_cameras`, with the API
+in §8.2.
+
+**Two cameras is the default and must stay visibly so.** `GET /rigs/presets`
+returns the arrangements in recommended order with `pair` first and flagged
+`default`. The screen should open on it, not on a chooser — a club that just
+wants the standard rig should never have to make a decision to get it. Adding a
+third camera is an action, not a fork in the flow.
+
+The presets are SERVED, not compiled in, so a new arrangement appears without
+an app release. Render whatever comes back; do not hardcode the list.
+
+**What the app collects per camera:**
+
+| Field | Why it is asked |
+| --- | --- |
+| Label | Fusion keys track identity on it. Unique in the rig, stable for the match. |
+| Position in the list | Spatial order along the pitch. First is the reference. |
+| Which camera | The body from §4.3's list, so its lens model comes with it. |
+| Fixed or panning | Decides whether it needs calibrating at all. |
+| Mount x, y, height | Metres **from the centre spot**. y negative is outside the touchline. |
+| Aim point | Where a fixed camera looks, on the grass. Meaningless for a panned one. |
+| Field of view, resolution | What decides coverage and pixels-per-player. |
+
+**Collect the mount by tape measure, not by guess.** "Roughly on the halfway
+line" is not a position, and the framing check is only as good as what it is
+given. Ask for the distance along the touchline from the halfway line, the
+distance out from the line, and the height — three numbers a volunteer with a
+tape can actually produce — and convert to the centre-origin frame in the app.
+
+**COORDINATES ARE METRES FROM THE CENTRE SPOT.** Not from a corner. The
+pipeline is centre-origin throughout, and a corner-origin position sent to it
+puts the camera 52.5 m down the pitch and 34 m across it — a finite, plausible
+position that still solves and is wrong on every frame. The API's field names
+say the frame (`mount_x_m_from_centre`); keep that in the client's types too.
+
+**Panning cameras need no calibration and the screen must say so.** For the
+standard operator-panned setup, geometry is solved per frame by the pipeline.
+Asking an operator to tap four pitch points for a camera they are about to
+swing around is asking for work that will be discarded. Only a `fixed` camera
+gets the framing step.
+
+**Adding a camera is a resolution decision.** Two already cover the pitch. What
+a third buys is a longer lens on each and a bigger player in the far corner
+(main PRD §3.0.11). The screen should say that, because "you already have
+coverage" is the wrong reason to stop at two.
+
 ### 4.2 Framing assistant — the highest-value screen in the app
 
 A misaimed rig is invisible to the operator and is not discovered until
@@ -540,6 +595,32 @@ what keeps the app small.
 - `POST /me/devices` — register a push token, platform, app version.
 - `DELETE /me/devices/{id}` — deregister on logout.
 - `GET/PATCH /me/notification-preferences`.
+
+**Rigs** — a saved arrangement, reused across matches. BUILT.
+- `GET /api/v1/rigs/presets` — the arrangements offered, `pair` first and
+  flagged `default`. Served so a new one needs no app release.
+- `GET /api/v1/rigs` — the club's rigs, each with its cameras in spatial order.
+- `POST /api/v1/rigs` — create or rename. Omitting `arrangement` gives a pair.
+- `GET|DELETE /api/v1/rigs/{rig_id}`
+- `PUT /api/v1/rigs/{rig_id}/cameras` — set the ordered camera list. REPLACES:
+  send all of them. Position comes from list order, the first is the reference,
+  and its clock offset must be zero.
+- `POST /api/v1/rigs/{rig_id}/cameras/{label}/calibration` — one camera's
+  homography, addressed by LABEL so re-ordering a rig cannot move a homography
+  onto a different viewpoint.
+
+**Multi-camera upload** — one match, several files, one job. BUILT.
+- `POST /api/v1/videos/rig-upload-urls` — one presigned URL per camera, in one
+  request. Labels are checked HERE: an operator who has just spent forty
+  minutes uploading four files should not then be told the second was labelled
+  wrong.
+- `POST /api/v1/videos/{job_id}/rig-uploaded` — confirm the whole set, once.
+  Not one call per file: a partially-uploaded rig is not a job that can
+  proceed, so there is no state worth recording between the first file landing
+  and the last.
+
+  Both routes need object storage. A rig has no local-disk equivalent —
+  `POST /videos/upload` takes one file.
 
 **Capture sessions** — the rig's unit of work, distinct from an upload
 - `POST /capture/sessions` — open a session: pitch id, device pair, roles,
