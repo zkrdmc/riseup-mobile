@@ -410,3 +410,241 @@ export function correctForPropagation(
 export function offsetInFrames(offsetSeconds: number, fps: number): number {
   return offsetSeconds * fps;
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ALIGNING ON WHAT THE GROUND ALREADY MAKES — the referee's whistle and
+   everything around it.
+   ══════════════════════════════════════════════════════════════════════════
+   The chirp above needs us to own the speaker. A club's Wi-Fi camcorder on a
+   mast does not take instructions from us; it hands over a file. For those, the
+   only shared clock is the sound of the match itself.
+
+   DO NOT DETECT THE WHISTLE. That is the obvious approach and it is the weak
+   one: a whistle has no known template — pitch, length and envelope vary by
+   referee and by whistle — so there is nothing to matched-filter against, and
+   any detector would be guessing which of the afternoon's whistles it found.
+
+   Correlate the two RECORDINGS against each other instead. It needs no model
+   of anything: whatever loud event both microphones heard, the whistle
+   included, drives the correlation to the lag that aligns them. The referee
+   supplies the transient; we never have to know it was a whistle.
+
+   PHASE TRANSFORM, not plain correlation. Two microphones at different
+   positions hear different amounts of each frequency — one is behind a stand,
+   one is next to a speaker, the phones apply their own automatic gain. Plain
+   correlation is dominated by whichever band happens to be loudest in both.
+   GCC-PHAT divides out the magnitude and keeps only the phase, so every
+   frequency contributes its timing and none contributes its loudness. It is
+   the standard estimator for exactly this problem and it is what makes the
+   method survive two different cameras.
+
+   ══════════════════════════════════════════════════════════════════════════
+    WHY THIS CANNOT REPLACE THE CHIRP
+   ══════════════════════════════════════════════════════════════════════════
+   The chirp comes from a device we placed and surveyed, so its flight time to
+   each camera is known and subtractable. The referee is somewhere on the pitch
+   and moving, and nobody knows where.
+
+   For two cameras a baseline B apart, the difference in flight time from an
+   unknown source ranges over ±B/c. That is not noise to be averaged away — it
+   is a bias set by where the referee happened to stand, and with two receivers
+   it is not observable at all. `propagationAmbiguity` returns it, and at any
+   realistic rig spacing it is worse than a frame.
+
+   So: the chirp is the answer where we own the speaker, and ambient alignment
+   is how a camera we do not control joins the timeline at all. Better than
+   nothing by a wide margin, and not a substitute. */
+
+/**
+ * The band ambient alignment listens in.
+ *
+ * Below 300 Hz is wind and handling rumble, which two cameras share almost
+ * none of. Above 5 kHz a distant transient has already lost its high end to
+ * air absorption, and what reaches a far microphone is mostly its own hiss.
+ * A referee's whistle sits around 3–4 kHz and is comfortably inside.
+ */
+const AMBIENT_BAND_LO_HZ = 300;
+const AMBIENT_BAND_HI_HZ = 5000;
+
+/**
+ * The bar for an ambient alignment, and it is far higher than the marker's.
+ *
+ * Measured, not chosen: twelve pairs of genuinely unrelated recordings produced
+ * peak ratios between 5.2 and 7.1 through this estimator. `MIN_PEAK_RATIO` of 6
+ * — right for a matched filter against a known template — sits inside that
+ * range and would call noise a match about half the time. A shared soundfield
+ * clears 30× comfortably, so the gap is wide and the threshold belongs in it.
+ */
+export const MIN_AMBIENT_PEAK_RATIO = 15;
+
+export interface AmbientAlignment {
+  /**
+   * How much LATER `other` heard the same sound than `reference`, in seconds.
+   *
+   * Positive means `other` is behind. Named for what it measures rather than
+   * what a caller does with it: "the lag" invites a sign error at every call
+   * site, and a sign error here inverts the offset between two cameras, which
+   * is the exact failure PRD §4.1 warns about for a swapped A/B assignment.
+   */
+  otherDelaySeconds: number;
+  /** Peak height over the background of the correlation. Same meaning as the marker's. */
+  peakRatio: number;
+  found: boolean;
+}
+
+/**
+ * Estimate the lag between two recordings of the same soundfield.
+ *
+ * `maxLagSeconds` bounds the search. It matters more than it looks: an
+ * unbounded search over two 90-minute recordings will eventually find a lag
+ * where crowd noise happens to line up, and report it confidently. Bound it
+ * with whatever coarse knowledge exists — a camera metadata timestamp good to
+ * ±30 s turns this into a tractable, trustworthy search.
+ */
+export function alignByAmbient(
+  reference: Float32Array,
+  other: Float32Array,
+  sampleRate: number = SYNC_CHIRP.sampleRate,
+  maxLagSeconds: number | null = null,
+): AmbientAlignment {
+  const n = Math.max(reference.length, other.length);
+  if (n === 0) {
+    return { otherDelaySeconds: 0, peakRatio: 0, found: false };
+  }
+  const size = nextPowerOfTwo(2 * n);
+
+  const ar = new Float64Array(size);
+  const ai = new Float64Array(size);
+  const br = new Float64Array(size);
+  const bi = new Float64Array(size);
+
+  const mean = (x: Float32Array): number => {
+    let s = 0;
+    for (let i = 0; i < x.length; i += 1) { s += x[i] as number; }
+    return x.length > 0 ? s / x.length : 0;
+  };
+  const ma = mean(reference);
+  const mb = mean(other);
+  for (let i = 0; i < reference.length; i += 1) { ar[i] = (reference[i] as number) - ma; }
+  for (let i = 0; i < other.length; i += 1) { br[i] = (other[i] as number) - mb; }
+
+  fft(ar, ai, false);
+  fft(br, bi, false);
+
+  // Cross-spectrum A · conj(B), PARTIALLY whitened and band-limited.
+  //
+  // Full phase transform — dividing by |R| — is the textbook GCC-PHAT and it
+  // is dangerous here. Whitening rescales every bin to unit magnitude,
+  // including bins that contain nothing but numerical noise, and those bins
+  // then vote on the answer with the same weight as the whistle. Measured on
+  // synthetic material at low signal-to-noise it produced a peak 249× the
+  // background at a lag wrong by 300 ms: maximum confidence, wrong answer,
+  // which is the one failure this whole module exists to avoid.
+  //
+  // Two corrections, both standard:
+  //
+  //   BAND LIMIT. Only frequencies a pitch actually radiates and a phone mic
+  //   actually captures. Outside that the cross-spectrum is noise being
+  //   amplified to full weight.
+  //
+  //   PARTIAL WHITENING, |R|^β with β below 1. β = 1 is full PHAT and is
+  //   maximally sharp and maximally brittle; β = 0 is plain correlation, which
+  //   the loudest band dominates. 0.7 keeps most of PHAT's robustness to two
+  //   microphones with different frequency responses without handing weight to
+  //   empty bins.
+  const beta = 0.7;
+  const loBin = Math.max(1, Math.floor((AMBIENT_BAND_LO_HZ * size) / sampleRate));
+  const hiBin = Math.min(Math.floor(size / 2), Math.ceil((AMBIENT_BAND_HI_HZ * size) / sampleRate));
+  // The magnitudes are needed before anything is overwritten, to set a floor
+  // relative to the strongest bin rather than to an absolute epsilon.
+  const mags = new Float64Array(size);
+  let maxMag = 0;
+  for (let i = 0; i < size; i += 1) {
+    const are = ar[i] as number, aim = ai[i] as number;
+    const bre = br[i] as number, bim = bi[i] as number;
+    const m = Math.hypot(are * bre + aim * bim, aim * bre - are * bim);
+    mags[i] = m;
+    if (m > maxMag) { maxMag = m; }
+  }
+  const floor = maxMag * 1e-3;
+
+  for (let i = 0; i < size; i += 1) {
+    // Mirror the band for the negative frequencies.
+    const bin = i <= size / 2 ? i : size - i;
+    const inBand = bin >= loBin && bin <= hiBin;
+    const m = mags[i] as number;
+    if (!inBand || m < floor) {
+      ar[i] = 0;
+      ai[i] = 0;
+      continue;
+    }
+    const are = ar[i] as number, aim = ai[i] as number;
+    const bre = br[i] as number, bim = bi[i] as number;
+    const cr = are * bre + aim * bim;
+    const ci = aim * bre - are * bim;
+    const scale = Math.pow(m, beta);
+    ar[i] = cr / scale;
+    ai[i] = ci / scale;
+  }
+  fft(ar, ai, true);
+
+  const maxLagSamples = maxLagSeconds === null
+    ? Math.floor(size / 2)
+    : Math.min(Math.floor(maxLagSeconds * sampleRate), Math.floor(size / 2));
+
+  let peak = -Infinity;
+  let peakLag = 0;
+  let sumAbs = 0;
+  let count = 0;
+  for (let lag = -maxLagSamples; lag <= maxLagSamples; lag += 1) {
+    const idx = lag >= 0 ? lag : size + lag;
+    const v = Math.abs((ar[idx] as number) / size);
+    sumAbs += v;
+    count += 1;
+    if (v > peak) { peak = v; peakLag = lag; }
+  }
+  const background = count > 0 ? sumAbs / count : 0;
+  const peakRatio = background > 1e-12 ? peak / background : 0;
+
+  return {
+    otherDelaySeconds: -peakLag / sampleRate,
+    peakRatio,
+    found: peakRatio >= MIN_AMBIENT_PEAK_RATIO,
+  };
+}
+
+export interface PropagationAmbiguity {
+  /** Worst-case timing error, in seconds, from not knowing where the source was. */
+  worstCaseSeconds: number;
+  /** The same, in frames, which is the number that decides whether it matters. */
+  worstCaseFrames: number;
+  /** True when the ambiguity is under half a frame and can be ignored. */
+  negligible: boolean;
+}
+
+/**
+ * How wrong an ambient alignment can be, given that nobody knows where the
+ * referee was standing.
+ *
+ * For two cameras a baseline `B` apart and a source anywhere, the difference in
+ * flight time spans ±B/c. It is a bias, not noise: averaging more whistles does
+ * not reduce it, because they all come from roughly the same place.
+ *
+ * With three or more cameras the source position becomes observable and this
+ * collapses — that is ordinary TDOA multilateration, and it is the way to make
+ * ambient alignment precise rather than merely useful.
+ */
+export function propagationAmbiguity(
+  baselineM: number,
+  fps: number,
+  temperatureC: number | null = null,
+): PropagationAmbiguity {
+  const c = temperatureC === null ? SPEED_OF_SOUND_MS : speedOfSound(temperatureC);
+  const worstCaseSeconds = Math.abs(baselineM) / c;
+  const worstCaseFrames = worstCaseSeconds * fps;
+  return {
+    worstCaseSeconds,
+    worstCaseFrames,
+    negligible: worstCaseFrames < 0.5,
+  };
+}

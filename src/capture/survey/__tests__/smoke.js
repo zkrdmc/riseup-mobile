@@ -956,6 +956,90 @@ console.log('21. Audio sync marker — one timeline from several cameras');
         fb.uncertaintySeconds === null && fb.warnings.length > 0, fb.warnings[0].slice(0, 44));
 }
 
+console.log('22. Aligning on the referee, not on our own chirp');
+{
+  const RATE = 8000;
+  // TWO DIFFERENT GENERATORS, and that is not fussiness. The first version of
+  // this test seeded both noise streams from the same LCG, so B's "independent"
+  // noise was A's noise shifted -- and the correlator correctly locked onto
+  // that shift instead of the whistle, at every SNR, deterministically. The
+  // estimator was suspected at length; the harness was the fault.
+  const lcg = (s) => () => { s = (s * 1103515245 + 12345) & 0x7fffffff; return s / 0x7fffffff * 2 - 1; };
+  const mulberry = (s) => () => {
+    s |= 0; s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return (((t ^ (t >>> 14)) >>> 0) / 4294967296) * 2 - 1;
+  };
+  const rA = lcg(7);
+  const rB = mulberry(999331);
+
+  // Crowd hiss plus a whistle-like shriek. Nothing here is a template the code
+  // knows about -- that is the whole point of correlating the recordings.
+  const a = (() => {
+    const n = RATE * 6;
+    const x = new Float32Array(n);
+    for (let i = 0; i < n; i++) x[i] = rA() * 0.25;
+    const at = Math.round(n * 0.45), len = Math.round(0.18 * RATE);
+    for (let i = 0; i < len; i++) {
+      const e = Math.sin((Math.PI * i) / len);
+      x[at + i] += e * 0.9 * (Math.sin(2 * Math.PI * 3400 * i / RATE)
+                            + 0.6 * Math.sin(2 * Math.PI * 4100 * i / RATE));
+    }
+    return x;
+  })();
+
+  const heardAgain = (delaySamples, gain, noiseAmp) => {
+    const y = new Float32Array(a.length);
+    let p = 0;
+    for (let i = 0; i < a.length; i++) {
+      const s = i - delaySamples >= 0 ? a[i - delaySamples] : 0;
+      p = 0.6 * p + 0.4 * s;             // a different frequency response
+      y[i] = p * gain + rB() * noiseAmp; // and its own unrelated noise
+    }
+    return y;
+  };
+
+  const trueDelay = 0.0875;   // 30 m of flight
+  const good = marker.alignByAmbient(a, heardAgain(700, 0.35, 0.2), RATE, 0.5);
+  check('two cameras align on match sound alone, with no template', good.found,
+        'peak ' + good.peakRatio.toFixed(1) + 'x background');
+  check('and the recovered delay matches what was applied',
+        Math.abs(good.otherDelaySeconds - trueDelay) < 0.002,
+        ((good.otherDelaySeconds - trueDelay) * 1000).toFixed(2) + ' ms error');
+
+  // Buried too deep: the answer is still RIGHT, and correctly not trusted.
+  const faint = marker.alignByAmbient(a, heardAgain(700, 0.1, 0.4), RATE, 0.5);
+  check('a too-faint match is refused rather than reported', !faint.found,
+        'ratio ' + faint.peakRatio.toFixed(1) + ' < ' + marker.MIN_AMBIENT_PEAK_RATIO);
+
+  const unrelated = new Float32Array(RATE * 6);
+  for (let i = 0; i < unrelated.length; i++) unrelated[i] = rB() * 0.3;
+  const u = marker.alignByAmbient(a, unrelated, RATE, 0.5);
+  check('two unrelated recordings report not found', !u.found, 'ratio ' + u.peakRatio.toFixed(2));
+
+  // ── THE LIMIT. This is why the whistle cannot be the truth. ──
+  const amb30 = marker.propagationAmbiguity(30, 30);
+  check('a 30 m rig carries +/-87 ms of irreducible ambiguity',
+        Math.abs(amb30.worstCaseSeconds - 0.0875) < 0.001,
+        (amb30.worstCaseSeconds * 1000).toFixed(1) + ' ms');
+  check('which is 2.6 frames at 30 fps -- not sub-frame',
+        !amb30.negligible && amb30.worstCaseFrames > 2,
+        amb30.worstCaseFrames.toFixed(2) + ' frames');
+  check('a 60 m rig is worse still', marker.propagationAmbiguity(60, 30).worstCaseFrames > 5,
+        marker.propagationAmbiguity(60, 30).worstCaseFrames.toFixed(1) + ' frames');
+  check('but two cameras 2 m apart have none worth counting',
+        marker.propagationAmbiguity(2, 30).negligible,
+        marker.propagationAmbiguity(2, 30).worstCaseFrames.toFixed(3) + ' frames');
+
+  const flight = 30 / marker.SPEED_OF_SOUND_MS;
+  const viaChirp = marker.correctForPropagation(
+    [{ deviceId: 'A', atSeconds: 2, distanceM: 0, peakRatio: 20 },
+     { deviceId: 'B', atSeconds: 2 + flight, distanceM: 30, peakRatio: 20 }], 'A');
+  check('the chirp resolves the same 30 m rig to zero, because the source is known',
+        Math.abs(viaChirp.find((o) => o.deviceId === 'B').offsetSeconds) < 0.0005);
+}
+
 console.log(`\n${'='.repeat(60)}`);
 console.log(`  ${pass} passed, ${fail} failed`);
 console.log('='.repeat(60));
