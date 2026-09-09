@@ -17,6 +17,7 @@ const detector = require('../../../../.smoke/capture/framing/detector');
 const pair = require('../../../../.smoke/capture/framing/pair');
 const dicts = require('../../../../.smoke/i18n/dictionaries');
 const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
+const chunksync = require('../../../../.smoke/capture/devices/merge');
 
 let pass = 0;
 let fail = 0;
@@ -652,6 +653,97 @@ console.log('18. Chunk manifests — reassembly of an out-of-order upload');
     sorted[0].endsWith('00000.mp4') && sorted[1].endsWith('00002.mp4') && sorted[3].endsWith('00010.mp4'),
     sorted[3],
   );
+}
+
+console.log('');
+console.log('19. Camera sync — merging one club list across handsets');
+{
+  const lens = (w, h, zoom, solvedAt, extra) =>
+    Object.assign(
+      {
+        id: `${w}x${h}@${zoom}-${solvedAt}`,
+        widthPx: w, heightPx: h, zoomRatio: zoom,
+        method: 'chessboard',
+        cameraMatrix: [2100, 0, 1920, 0, 2100, 1080, 0, 0, 1],
+        distortion: { coefficients: [-0.31, 0.12, 0.001, -0.002, 0.04], origin: 'chessboard', approximate: false },
+        rmsReprojectionError: 0.3, edgeBowPx: 41, solvedAt, appVersion: '0.1.0',
+      },
+      extra,
+    );
+
+  const cam = (id, label, extra) =>
+    Object.assign(
+      {
+        id, serverId: null, classId: 'camcorder', label, kind: 'external',
+        make: null, model: null, lensModel: null, calibrations: [],
+        createdAt: '2026-09-01T00:00:00Z', lastUsedAt: null, useCount: 0,
+      },
+      extra,
+    );
+
+  // A re-solve at the same setting: the newer one wins, and only one survives.
+  const merged = chunksync.mergeCalibrations(
+    [lens(3840, 2160, 1, '2026-09-01T00:00:00Z')],
+    [lens(3840, 2160, 1, '2026-09-05T00:00:00Z')],
+  );
+  check('a re-solve at one setting collapses to one lens', merged.length === 1, `${merged.length}`);
+  check('and the newer solve is the survivor', merged[0].solvedAt === '2026-09-05T00:00:00Z');
+
+  // Different settings are different lenses and must all survive.
+  const both = chunksync.mergeCalibrations(
+    [lens(3840, 2160, 1, '2026-09-01T00:00:00Z')],
+    [lens(1920, 1080, 1, '2026-09-02T00:00:00Z')],
+  );
+  check('4K and 1080p both survive a merge', both.length === 2, `${both.length}`);
+
+  // Zoom within a hundredth is ONE setting — same rule as the server's zoom_key.
+  const jitter = chunksync.mergeCalibrations(
+    [lens(3840, 2160, 1.0, '2026-09-01T00:00:00Z')],
+    [lens(3840, 2160, 1.004, '2026-09-05T00:00:00Z')],
+  );
+  check('zoom 1.004 is the same setting as 1.000, matching the server', jitter.length === 1);
+
+  // THE PAYOFF: a camera somebody else calibrated arrives on a phone that has
+  // never seen it, lens model included.
+  const fresh = chunksync.reconcile(
+    [],
+    [cam('srv-1', 'Club camcorder', { serverId: 'srv-1', calibrations: [lens(3840, 2160, 1, '2026-09-05T00:00:00Z')] })],
+  );
+  check('a camera another member registered arrives here', fresh.cameras.length === 1);
+  check('and its lens model comes with it', fresh.cameras[0].calibrations.length === 1);
+  check('with nothing to push back', fresh.toPush.length === 0);
+
+  // A camera created offline is queued, never dropped.
+  const offline = chunksync.reconcile([cam('local-1', 'Youssef phone')], []);
+  check('a camera created offline is kept', offline.cameras.length === 1);
+  check('and queued for push rather than deleted', offline.toPush.length === 1);
+
+  // Never-pushed local meets the server row for the same physical camera:
+  // matched by label, because that is the server's own unique key.
+  const byLabel = chunksync.reconcile(
+    [cam('local-2', 'Club camcorder', { calibrations: [lens(1920, 1080, 1, '2026-09-01T00:00:00Z')] })],
+    [cam('srv-2', 'Club camcorder', { serverId: 'srv-2', calibrations: [lens(3840, 2160, 1, '2026-09-04T00:00:00Z')] })],
+  );
+  check('a never-pushed local camera matches the server row by name', byLabel.cameras.length === 1,
+        `${byLabel.cameras.length} rows`);
+  check('it adopts the server id', byLabel.cameras[0].serverId === 'srv-2');
+  check('and BOTH calibrations survive the union', byLabel.cameras[0].calibrations.length === 2);
+  check('nothing is re-pushed as a duplicate', byLabel.toPush.length === 0);
+
+  // A rename must not orphan the camera — serverId is what matching uses once set.
+  const renamed = chunksync.reconcile(
+    [cam('local-3', 'Main camcorder', { serverId: 'srv-3' })],
+    [cam('srv-3', 'Club camcorder', { serverId: 'srv-3' })],
+  );
+  check('a renamed camera is still one camera, not two', renamed.cameras.length === 1,
+        `${renamed.cameras.length} rows`);
+
+  // The usage tally is club-wide, so the larger count is the real one.
+  const tally = chunksync.reconcile(
+    [cam('local-4', 'Cam', { serverId: 'srv-4', useCount: 2 })],
+    [cam('srv-4', 'Cam', { serverId: 'srv-4', useCount: 7 })],
+  );
+  check('the club-wide usage count wins over this handset\u2019s', tally.cameras[0].useCount === 7);
 }
 
 console.log(`\n${'='.repeat(60)}`);

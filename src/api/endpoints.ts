@@ -62,6 +62,19 @@ export const paths = {
   /* ── Venues — needed by the framing check in v0.3 ── */
   pitches: `${V1}/venues/pitches`,
 
+  /* ── Cameras and their lenses — BUILT, migration 015 ──
+     The club's own cameras, distinct from `venues/cameras`, which administers
+     installed cameras with stream credentials. A lens model survives being
+     carried to another ground; a homography does not. */
+  cameras: `${V1}/cameras`,
+  camera: (cameraId: string) => `${V1}/cameras/${cameraId}`,
+  cameraUsed: (cameraId: string) => `${V1}/cameras/${cameraId}/used`,
+  /** Query: widthPx, heightPx, zoomRatio. 404 when not calibrated at that setting. */
+  cameraLens: (cameraId: string) => `${V1}/cameras/${cameraId}/lens`,
+  cameraLenses: (cameraId: string) => `${V1}/cameras/${cameraId}/lenses`,
+  cameraLensDelete: (cameraId: string, lensId: string) =>
+    `${V1}/cameras/${cameraId}/lenses/${lensId}`,
+
   /* ── NOT YET BUILT — see docs/BACKEND-GAPS.md ─────────────────────────────
      Calling any of these today returns 404. They are the v0.1 and v0.2
      backend work, written down at the shape the client expects.

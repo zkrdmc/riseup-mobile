@@ -10,7 +10,7 @@
     "prebuild": "expo prebuild",
     "typecheck": "tsc --noEmit",
     "lint": "expo lint",
-    "smoke": "node -e \"require('fs').rmSync('.smoke',{recursive:true,force:true})\" && tsc --ignoreConfig src/capture/survey/schema.ts src/capture/survey/derive.ts src/capture/survey/distortion.ts src/capture/survey/opencv.ts src/capture/survey/exif.ts src/capture/survey/validate.ts src/capture/framing/landmarks.ts src/capture/framing/visibility.ts src/capture/framing/detector.ts src/capture/framing/pair.ts src/capture/upload/chunkManifest.ts src/i18n/dictionaries.ts src/i18n/i18n.ts --rootDir src --outDir .smoke --module commonjs --target es2020 --skipLibCheck --esModuleInterop && node src/capture/survey/__tests__/smoke.js"
+    "smoke": "node -e \"require('fs').rmSync('.smoke',{recursive:true,force:true})\" && tsc --ignoreConfig src/capture/survey/schema.ts src/capture/survey/derive.ts src/capture/survey/distortion.ts src/capture/survey/opencv.ts src/capture/survey/exif.ts src/capture/survey/validate.ts src/capture/framing/landmarks.ts src/capture/framing/visibility.ts src/capture/framing/detector.ts src/capture/framing/pair.ts src/capture/upload/chunkManifest.ts src/capture/devices/merge.ts src/i18n/dictionaries.ts src/i18n/i18n.ts --rootDir src --outDir .smoke --module commonjs --target es2020 --skipLibCheck --esModuleInterop && node src/capture/survey/__tests__/smoke.js"
   },
   "dependencies": {
     "@clerk/expo": "^4.6.5",

@@ -61,7 +61,18 @@ export interface LensCalibration {
 }
 
 export interface SavedCamera {
+  /** This device's id for the camera. Stable across syncs. */
   id: string;
+  /**
+   * The server's id, once this camera has been pushed.
+   *
+   * Separate from `id` because a camera created with no signal gets a local
+   * UUID and the server mints its own on first push — the two never match.
+   * Reconciling on label instead would turn a rename into a delete and lose
+   * every calibration attached to it. Null means "never pushed", which is a
+   * state a camera can legitimately sit in for a whole match.
+   */
+  serverId: string | null;
   /**
    * Which supported class this is — the key into `catalogue.ts`.
    *

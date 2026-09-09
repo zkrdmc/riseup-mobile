@@ -40,7 +40,13 @@ class CameraStore {
     try {
       const raw = await AsyncStorage.getItem(STORAGE_KEY);
       if (raw !== null) {
-        this.cameras = JSON.parse(raw) as SavedCamera[];
+        // Records written before `serverId` existed have the field absent,
+        // and `as SavedCamera[]` would assert otherwise. Normalising here
+        // means the rest of the file can trust the type — the alternative is
+        // an `undefined` reaching the sync reconciler as though it were a
+        // server id.
+        const parsed = JSON.parse(raw) as SavedCamera[];
+        this.cameras = parsed.map((c) => ({ ...c, serverId: c.serverId ?? null }));
         this.emit();
       }
     } catch {
@@ -54,6 +60,7 @@ class CameraStore {
     const cls = cameraClassById(input.classId);
     const camera: SavedCamera = {
       id: Crypto.randomUUID(),
+      serverId: null,
       classId: input.classId,
       label: input.label.trim(),
       kind: cls?.kind ?? 'external',
@@ -68,6 +75,30 @@ class CameraStore {
     this.cameras = [...this.cameras, camera];
     this.emit();
     return camera;
+  }
+
+  /**
+   * Replace the whole list after a sync merge.
+   *
+   * Takes the merged result rather than merging here, so the merge rule lives
+   * in one testable place (`sync.ts`) instead of inside a class that also owns
+   * persistence.
+   */
+  replaceAll(cameras: SavedCamera[]): void {
+    this.cameras = cameras;
+    this.emit();
+  }
+
+  /**
+   * Record the id the server gave a camera we created offline.
+   *
+   * Without this, the next sync matches on label — which works until somebody
+   * renames the camera, at which point it looks like a new one and the club
+   * gets two rows for one camcorder.
+   */
+  linkToServer(localId: string, serverId: string): void {
+    this.cameras = this.cameras.map((c) => (c.id === localId ? { ...c, serverId } : c));
+    this.emit();
   }
 
   rename(id: string, label: string): void {

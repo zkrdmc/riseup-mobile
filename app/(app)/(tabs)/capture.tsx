@@ -23,7 +23,9 @@ import { useEffect, useMemo, useSyncExternalStore } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 
+import { useApi } from '../../../src/api/provider';
 import { cameraStore, orderForPicker } from '../../../src/capture/devices/store';
+import { syncCameras } from '../../../src/capture/devices/sync';
 import { calibrationSummary, classOf, readiness } from '../../../src/capture/devices/types';
 import { surveyDraft } from '../../../src/capture/survey/draft';
 import { ink, minTouchTarget, space, surface } from '../../../src/theme/tokens';
@@ -34,13 +36,25 @@ import { Body, BodyStrong, Display, Label } from '../../../src/ui/Text';
 
 export default function CaptureScreen() {
   const router = useRouter();
+  const api = useApi();
   const cameras = useSyncExternalStore(cameraStore.subscribe, cameraStore.getSnapshot);
   const draft = useSyncExternalStore(surveyDraft.subscribe, surveyDraft.getSnapshot);
 
+  // Local first, always: hydrate from storage and render, then reach for the
+  // server. The order matters at a ground with no signal — a picker that waited
+  // on a request would show nothing while the operator stands in the car park
+  // with a camera they registered last week.
   useEffect(() => {
-    void cameraStore.hydrate();
-    void surveyDraft.hydrate();
-  }, []);
+    void (async () => {
+      await cameraStore.hydrate();
+      await surveyDraft.hydrate();
+      // Failure is deliberately unhandled and unsurfaced: `syncCameras`
+      // reports it as a return value rather than a throw, and there is nothing
+      // useful to tell somebody whose phone simply has no bars. It retries on
+      // the next visit to this screen.
+      await syncCameras(api);
+    })();
+  }, [api]);
 
   const ordered = useMemo(() => orderForPicker(cameras), [cameras]);
 
