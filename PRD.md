@@ -70,6 +70,72 @@ Upload, notification and analytics are online features and may say so.
 This constraint drives the framing-check design in §4.2 and is the single
 most likely thing to be forgotten during implementation.
 
+### 3.0.3 The sync marker — how several cameras become one timeline
+
+Referenced throughout and previously unwritten. Implemented in
+`src/capture/sync/marker.ts`.
+
+**A swept chirp, 1–8 kHz, one second, emitted at session start.** Not a beep.
+Timing from a short transient is set by how sharply its edge can be localised,
+and outdoors that edge is mush — worse after AAC, which smears transients
+badly. Cross-correlated against a copy of itself, a one-second sweep collapses
+to a peak whose width is set by its **bandwidth, not its duration**, so the
+marker can carry real energy through noise and still be located to a fraction
+of a millisecond. Measured: recovered to **0.002 ms** with noise at three times
+the marker's own amplitude.
+
+The band is bounded by hardware at both ends. Below ~500 Hz a phone speaker
+radiates almost nothing. Above ~15 kHz phone microphones roll off and AAC
+discards the band. An ultrasonic marker near 19 kHz is tempting because a crowd
+cannot hear it, and it is a trap: it is the first thing the codec throws away.
+Audible is a feature — the operator hears the rig arm itself.
+
+**The correlation peak is not the clock offset.** Sound travels 343 m/s, so two
+cameras 30 m apart hear the same chirp **87 ms apart — 2.6 frames at 30 fps —
+with perfectly synchronised clocks.** What the peak gives is
+
+```
+clock offset  +  (distance from the speaker ÷ speed of sound)
+```
+
+Treating the two as one puts a constant, plausible, invisible error into every
+fused position. The survey already records where each camera stands (§4.3),
+which is exactly what removes the propagation term. A camera with no surveyed
+position is **not** assumed to be at the speaker; its offset comes back
+uncorrected and carrying a warning.
+
+**Confidence is the peak's height above the rest of the correlation, not its
+absolute height.** Pure noise always has a maximum somewhere. The bar is 6×
+background, set high on purpose: a marker reported where there is none produces
+a confident, precise, wrong offset that every position inherits, while a marker
+missed produces "these cameras could not be aligned", which sends somebody to
+check the volume. The second is recoverable.
+
+### 3.0.4 Sync sources, ranked by what they are worth
+
+The marker is the truth. Everything else is either convenience or a way to make
+finding the marker cheap.
+
+| Source | Realistic accuracy | Worth |
+| --- | --- | --- |
+| **Audio marker**, propagation-corrected | ~±5 ms | The answer. Sub-frame at 30 fps. |
+| BLE round-trip ping | ±20–50 ms | Starts everything on one tap. Never the offset. |
+| Wi-Fi / NTP | ±10–30 ms | Same. |
+| Camera metadata timestamp | ±0.5 s to *hours* | Brackets the search. Never the offset. |
+
+**Metadata timestamps earn their place by narrowing the search, not by being
+trusted.** A camera whose clock was never set can be wrong by hours; one that
+was set still drifts. But even a timestamp good to ±30 seconds turns a
+correlation over a whole 90-minute recording into a correlation over a
+one-minute window — which is the difference between a search that is expensive
+and one that is free. Use them to decide *where to look*, never *what the
+answer is*.
+
+**The link must stay advisory.** §4.5 already says it: a rig that fails to
+record because the phones lost Bluetooth is worse than one that starts 200 ms
+apart, which the marker corrects anyway. Every device starts on its own if the
+link drops, and the marker aligns them afterwards.
+
 ---
 
 ## 4. Capture

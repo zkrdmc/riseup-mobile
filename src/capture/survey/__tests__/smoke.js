@@ -19,6 +19,7 @@ const dicts = require('../../../../.smoke/i18n/dictionaries');
 const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
+const marker = require('../../../../.smoke/capture/sync/marker');
 
 let pass = 0;
 let fail = 0;
@@ -858,6 +859,101 @@ console.log('20. Pitch calibration — is this view solvable?');
         solve.framesDisagree({ width: 1920, height: 1080 }, { widthPx: 3840, heightPx: 2160 }).sameShape);
   check('a 4:3 still against a 16:9 video is a different crop',
         !solve.framesDisagree({ width: 4032, height: 3024 }, { widthPx: 3840, heightPx: 2160 }).sameShape);
+}
+
+console.log('');
+console.log('21. Audio sync marker — one timeline from several cameras');
+{
+  // 8 kHz keeps the test quick; the maths is sample-rate agnostic and the
+  // shipping marker runs at 48 kHz.
+  const RATE = 8000;
+  const spec = { startHz: 500, endHz: 3000, durationMs: 250, sampleRate: RATE };
+  const chirp = marker.generateChirp(spec);
+  check('the chirp is the length it says', chirp.length === RATE * 0.25, chirp.length + ' samples');
+  check('and it fades in rather than clicking', Math.abs(chirp[0]) < 0.01, chirp[0].toFixed(4));
+
+  // A recording: silence, then the chirp at a known instant, plus noise.
+  const plant = (atSec, noiseAmp, gain) => {
+    const total = RATE * 3;
+    const rec = new Float32Array(total);
+    let seed = 12345;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+    for (let i = 0; i < total; i++) rec[i] = rnd() * noiseAmp;
+    const start = Math.round(atSec * RATE);
+    for (let i = 0; i < chirp.length; i++) rec[start + i] += chirp[i] * gain;
+    return rec;
+  };
+
+  // 1. Clean-ish recovery of a known instant.
+  const d1 = marker.findMarker(plant(1.5, 0.05, 1.0), chirp, RATE);
+  check('the marker is found', d1.found, 'peak ' + d1.peakRatio.toFixed(1) + 'x background');
+  check('at the instant it was planted', Math.abs(d1.atSeconds - 1.5) < 0.002,
+        d1.atSeconds.toFixed(5) + ' s vs 1.5');
+
+  // 2. THE POINT OF A CHIRP: it still works buried in noise, where a click
+  //    would not. Noise three times the signal amplitude.
+  const d2 = marker.findMarker(plant(0.9, 3.0, 1.0), chirp, RATE);
+  check('found under noise 3x its own amplitude', d2.found, 'peak ' + d2.peakRatio.toFixed(1) + 'x');
+  check('and still lands within a millisecond', Math.abs(d2.atSeconds - 0.9) < 0.001,
+        ((d2.atSeconds - 0.9) * 1000).toFixed(3) + ' ms error');
+
+  // 3. No marker present at all must NOT produce a confident answer.
+  let seed = 999;
+  const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff * 2 - 1; };
+  const pureNoise = new Float32Array(RATE * 3);
+  for (let i = 0; i < pureNoise.length; i++) pureNoise[i] = rnd();
+  check('pure noise reports NOT found', !marker.findMarker(pureNoise, chirp, RATE).found,
+        marker.findMarker(pureNoise, chirp, RATE).peakRatio.toFixed(2) + 'x');
+
+  // 4. A DC offset must not drag the peak to lag zero.
+  const dc = plant(1.2, 0.05, 1.0);
+  for (let i = 0; i < dc.length; i++) dc[i] += 0.8;
+  const d4 = marker.findMarker(dc, chirp, RATE);
+  check('a DC offset does not move the peak', Math.abs(d4.atSeconds - 1.2) < 0.002,
+        d4.atSeconds.toFixed(4));
+
+  // 5. THE ERROR THAT WOULD POISON EVERY POSITION: propagation delay.
+  //    Two cameras, clocks perfectly synced, 30 m apart. B hears it later
+  //    purely because sound takes time to get there.
+  const flight30 = 30 / marker.SPEED_OF_SOUND_MS;
+  const hearings = [
+    { deviceId: 'A', atSeconds: 2.000, distanceM: 0, peakRatio: 20 },
+    { deviceId: 'B', atSeconds: 2.000 + flight30, distanceM: 30, peakRatio: 20 },
+  ];
+  const corrected = marker.correctForPropagation(hearings, 'A');
+  const b = corrected.find((o) => o.deviceId === 'B');
+  check('two synced cameras 30 m apart resolve to ZERO offset',
+        Math.abs(b.offsetSeconds) < 0.0005, (b.offsetSeconds * 1000).toFixed(3) + ' ms');
+  check('and the flight time removed is reported', Math.abs(b.propagationRemovedSeconds - flight30) < 1e-6,
+        (b.propagationRemovedSeconds * 1000).toFixed(1) + ' ms');
+  check('which at 30 fps would have been ~2.6 frames of silent error',
+        Math.abs(marker.offsetInFrames(flight30, 30) - 2.6) < 0.2,
+        marker.offsetInFrames(flight30, 30).toFixed(2) + ' frames');
+
+  // 6. A genuine clock offset survives the correction.
+  const skewed = [
+    { deviceId: 'A', atSeconds: 2.000, distanceM: 0, peakRatio: 20 },
+    { deviceId: 'B', atSeconds: 2.000 + flight30 - 0.120, distanceM: 30, peakRatio: 20 },
+  ];
+  const bs = marker.correctForPropagation(skewed, 'A').find((o) => o.deviceId === 'B');
+  check('a real 120 ms clock skew is recovered', Math.abs(bs.offsetSeconds - 0.120) < 0.001,
+        (bs.offsetSeconds * 1000).toFixed(1) + ' ms');
+
+  // 7. An unsurveyed camera is warned about, not silently assumed to be at 0 m.
+  const unknown = marker.correctForPropagation(
+    [{ deviceId: 'A', atSeconds: 2, distanceM: 0, peakRatio: 20 },
+     { deviceId: 'B', atSeconds: 2, distanceM: null, peakRatio: 20 }], 'A');
+  const ub = unknown.find((o) => o.deviceId === 'B');
+  check('an unsurveyed camera warns rather than assuming', ub.warnings.length > 0);
+  check('and refuses to state an uncertainty', ub.uncertaintySeconds === null);
+
+  // 8. A marker that was not clearly heard cannot be trusted.
+  const faint = marker.correctForPropagation(
+    [{ deviceId: 'A', atSeconds: 2, distanceM: 0, peakRatio: 20 },
+     { deviceId: 'B', atSeconds: 2, distanceM: 10, peakRatio: 1.4 }], 'A');
+  const fb = faint.find((o) => o.deviceId === 'B');
+  check('a faint detection is flagged and given no uncertainty',
+        fb.uncertaintySeconds === null && fb.warnings.length > 0, fb.warnings[0].slice(0, 44));
 }
 
 console.log(`\n${'='.repeat(60)}`);
