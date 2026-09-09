@@ -111,9 +111,13 @@ export default function CaptureScreen() {
               <View key={camera.id}>
                 {index === 0 ? null : <Rule inset={space[4]} />}
                 <Pressable
-                  onPress={() => router.push('/survey')}
+                  onPress={() => router.push({
+                    pathname: '/calibrate',
+                    params: { cameraId: camera.id },
+                  })}
                   accessibilityRole="button"
                   accessibilityLabel={`${camera.label}. ${calibrationSummary(camera)}`}
+                  accessibilityHint="Calibrate the pitch for this camera"
                   style={({ pressed }) => [styles.row, pressed ? styles.rowPressed : null]}
                 >
                   <View style={styles.flex}>

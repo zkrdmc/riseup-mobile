@@ -119,6 +119,15 @@ function AppStack() {
           headerShown: false,
         }}
       />
+      <Stack.Screen
+        name="calibrate"
+        options={{
+          // Full screen for the same reason as the survey: it is used
+          // standing at a pitch, marking points on a photograph, and a
+          // sheet that swipes away takes a dozen careful taps with it.
+          headerShown: false,
+        }}
+      />
       <Stack.Screen name="report" />
       <Stack.Screen
         name="match/player"

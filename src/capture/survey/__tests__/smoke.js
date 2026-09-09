@@ -18,6 +18,7 @@ const pair = require('../../../../.smoke/capture/framing/pair');
 const dicts = require('../../../../.smoke/i18n/dictionaries');
 const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
+const solve = require('../../../../.smoke/capture/calibration/solve');
 
 let pass = 0;
 let fail = 0;
@@ -744,6 +745,119 @@ console.log('19. Camera sync — merging one club list across handsets');
     [cam('srv-4', 'Cam', { serverId: 'srv-4', useCount: 7 })],
   );
   check('the club-wide usage count wins over this handset\u2019s', tally.cameras[0].useCount === 7);
+}
+
+console.log('');
+console.log('20. Pitch calibration — is this view solvable?');
+{
+  const LEN = 105, WID = 68;
+  const marks = landmarks.pitchLandmarks(LEN, WID);
+  const W = 3840, H = 2160;
+
+  // A synthetic camera: a plausible homography mapping pitch metres to a 4K
+  // frame, with real perspective foreshortening (the far touchline compressed).
+  const TRUE_H = [
+    32.0,   1.2, 240.0,
+     2.0,  -9.5, 1900.0,
+     0.0007, -0.0042, 1.0,
+  ];
+  const project = (x, y) => {
+    const w = TRUE_H[6] * x + TRUE_H[7] * y + TRUE_H[8];
+    return { x: (TRUE_H[0] * x + TRUE_H[1] * y + TRUE_H[2]) / w,
+             y: (TRUE_H[3] * x + TRUE_H[4] * y + TRUE_H[5]) / w };
+  };
+  const tap = (id, jitterPx = 0) => {
+    const m = marks.find((l) => l.id === id);
+    if (!m) throw new Error('no landmark ' + id);
+    const p = project(m.x, m.y);
+    return { landmarkId: id, imageX: p.x + jitterPx, imageY: p.y + jitterPx };
+  };
+
+  const wellSpread = marks
+    .filter((l, i) => i % 2 === 0)
+    .slice(0, 12)
+    .map((l) => tap(l.id));
+
+  const base = { landmarks: marks, imageWidth: W, imageHeight: H };
+
+  // 1. A clean view solves, and recovers the homography we projected with.
+  const good = solve.assessSolvability({ ...base, correspondences: wellSpread });
+  check('a well-spread view is solvable', good.solvable, good.message.slice(0, 46));
+  check('and the fit is essentially exact', good.rmsErrorPx < 0.5,
+        good.rmsErrorPx.toFixed(3) + ' px rms');
+  check('and it reports the weaker solver honestly', good.solvedBy === 'least_squares');
+
+  // The recovered matrix must actually reproject a point we did NOT fit on.
+  {
+    const held = marks.find((l) => !wellSpread.some((c) => c.landmarkId === l.id));
+    const expected = project(held.x, held.y);
+    const got = solve.applyHomography(good.homography, { x: held.x, y: held.y });
+    const err = Math.hypot(got.x - expected.x, got.y - expected.y);
+    check('a landmark NOT used in the fit reprojects correctly', err < 1.0,
+          err.toFixed(3) + ' px on "' + held.label + '"');
+  }
+
+  // 2. THE CASE GEOMETRY CANNOT CATCH: right landmarks, well spread, one tap
+  //    put on the wrong spot. The view is fine; the taps disagree.
+  const misTapped = wellSpread.map((c, i) =>
+    i === 3 ? { ...c, imageX: c.imageX + 900, imageY: c.imageY + 500 } : c);
+  const bad = solve.assessSolvability({ ...base, correspondences: misTapped });
+  check('one mis-tapped point is refused', !bad.solvable);
+  check('and it is named as inconsistent taps, not a bad view',
+        bad.failure === 'TAPS_INCONSISTENT', bad.failure);
+  check('and the worst point is identified by name',
+        bad.worstPoint !== null && bad.message.includes(bad.worstPoint.label),
+        bad.worstPoint && bad.worstPoint.label);
+
+  // 3. Too few points to determine a homography at all.
+  const three = solve.assessSolvability({ ...base, correspondences: wellSpread.slice(0, 3) });
+  check('three points cannot solve a homography', !three.solvable);
+  check('and the reason is arithmetic, not framing',
+        three.failure === 'TOO_FEW_FOR_HOMOGRAPHY', three.failure);
+
+  // 4. Points along the halfway line: they FIT perfectly and are unsolvable.
+  //    This is why the view is judged before the reprojection error.
+  const collinear = marks
+    .filter((l) => Math.abs(l.x - LEN / 2) < 0.01)
+    .map((l) => tap(l.id));
+  if (collinear.length >= 4) {
+    const line = solve.assessSolvability({ ...base, correspondences: collinear });
+    check('collinear points are refused despite fitting perfectly', !line.solvable);
+    check('and the reason is the view, not the taps',
+          line.failure === 'VIEW_INADEQUATE', line.failure);
+  }
+
+  // 5. Honest finger imprecision must NOT fail a good calibration.
+  const jittered = marks
+    .filter((l, i) => i % 2 === 0).slice(0, 12)
+    .map((l, i) => tap(l.id, ((i % 5) - 2) * 12));
+  const shaky = solve.assessSolvability({ ...base, correspondences: jittered });
+  check('a dozen pixels of tap wobble still solves', shaky.solvable,
+        shaky.rmsErrorPx.toFixed(1) + ' px rms');
+
+  // 6. An OpenCV RANSAC result is used when supplied, and labelled as such.
+  const viaOpenCv = solve.assessSolvability({
+    ...base, correspondences: wellSpread,
+    homography: { h: TRUE_H, solvedBy: 'opencv_ransac' },
+  });
+  check('a supplied RANSAC solve is used instead of the fallback',
+        viaOpenCv.solvedBy === 'opencv_ransac');
+  check('and it reprojects exactly, being the true matrix',
+        viaOpenCv.rmsErrorPx < 1e-6, viaOpenCv.rmsErrorPx.toExponential(1));
+
+  // 7. Empty state.
+  check('no taps at all asks for taps',
+        solve.assessSolvability({ ...base, correspondences: [] }).failure === 'NO_POINTS');
+
+  // 8. Frame/capture agreement — a homography is valid at ONE frame size.
+  check('a 4K frame matches a 4K capture',
+        !solve.framesDisagree({ width: 3840, height: 2160 }, { widthPx: 3840, heightPx: 2160 }).disagree);
+  check('a 1080p frame against 4K capture is flagged',
+        solve.framesDisagree({ width: 1920, height: 1080 }, { widthPx: 3840, heightPx: 2160 }).disagree);
+  check('but is recognised as the same SHAPE, so it rescales',
+        solve.framesDisagree({ width: 1920, height: 1080 }, { widthPx: 3840, heightPx: 2160 }).sameShape);
+  check('a 4:3 still against a 16:9 video is a different crop',
+        !solve.framesDisagree({ width: 4032, height: 3024 }, { widthPx: 3840, heightPx: 2160 }).sameShape);
 }
 
 console.log(`\n${'='.repeat(60)}`);
