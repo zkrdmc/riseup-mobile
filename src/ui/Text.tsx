@@ -29,11 +29,28 @@ interface BaseProps extends RNTextProps {
   color?: string;
 }
 
+/**
+ * `flexShrink: 1` on every piece of text in the app, and it is not cosmetic.
+ *
+ * React Native lays a `Text` out at its intrinsic width inside a
+ * `flexDirection: 'row'` container and does NOT shrink it by default, so any
+ * row holding a label and a sentence pushes the sentence off the right edge —
+ * the text is not clipped, it is simply drawn outside the screen, and nothing
+ * in the layout reports a problem. It showed up on the sign-in footer as a
+ * sentence ending mid-word, and the same pattern is in every `Row` in the app.
+ *
+ * Shrinking lets the text wrap inside the space it actually has. Outside a row
+ * this changes nothing: a Text in a column already fills the width, so there
+ * is no overflow to shrink away.
+ */
+const SHRINK = { flexShrink: 1 } as const;
+
 function useTextStyle(
   base: object,
   { tone, size, color, style }: BaseProps & { style?: RNTextProps['style'] },
 ) {
   return [
+    SHRINK,
     base,
     tone === undefined ? null : { color: ink[tone] },
     size === undefined ? null : { fontSize: size },

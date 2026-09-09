@@ -44,7 +44,6 @@
 
 import { useUser } from '@clerk/expo';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Localization from 'expo-localization';
 import * as Updates from 'expo-updates';
 import {
   createContext,
@@ -57,6 +56,8 @@ import {
 } from 'react';
 import { AppState, I18nManager } from 'react-native';
 
+import { optionalNative } from '../lib/optionalNative';
+
 import {
   DEFAULT_LOCALE,
   isLocale,
@@ -66,6 +67,21 @@ import {
   translate,
   type Locale,
 } from './i18n';
+
+/**
+ * `expo-localization`, loaded so a binary without it still boots.
+ *
+ * A static import is evaluated during module initialisation, before any code
+ * here runs — and expo-router imports every route to build its tree, so one
+ * missing native module took the WHOLE APP down with "Cannot find native
+ * module 'ExpoLocalization'" and no first frame. The guard that used to sit in
+ * the effect below was correct and never reached.
+ *
+ * Null means the device language cannot be read. English until the user picks,
+ * which is the same outcome as a phone set to a language we do not carry.
+ */
+const Localization = optionalNative('expo-localization', () =>
+  require('expo-localization') as typeof import('expo-localization'));
 
 const STORAGE_KEY = 'riseup.language.v1';
 /** The key the dashboard must read and write for this to be shared. */
@@ -132,12 +148,13 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         let resolved = stored;
         if (resolved === null) {
           try {
-            resolved = matchDeviceLocale(
-              Localization.getLocales().map((l) => l.languageTag),
-            );
+            resolved =
+              Localization === null
+                ? DEFAULT_LOCALE
+                : matchDeviceLocale(Localization.getLocales().map((l) => l.languageTag));
           } catch {
-            // No native module. English until the user picks, which is the
-            // same outcome as a device set to a language we do not carry.
+            // Resolved but threw on use — a module can be present in the
+            // bundle and absent from the binary in different ways.
             resolved = DEFAULT_LOCALE;
           }
         }

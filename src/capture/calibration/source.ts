@@ -45,9 +45,27 @@
  * cover fewer cameras than the file import does.
  */
 
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
-import * as VideoThumbnails from 'expo-video-thumbnails';
+import { optionalNative, rebuildHint } from '../../lib/optionalNative';
+
+/*
+ * Loaded defensively, not imported. Every one of these is native-backed, this
+ * file is reached by expo-router's route scan through `app/(app)/calibrate.tsx`,
+ * and a static import of a module missing from the running binary throws
+ * during module initialisation — taking the whole app down before its first
+ * frame rather than disabling one button. `lib/optionalNative.ts` has the full
+ * account; it is the failure that stopped the app booting when
+ * expo-localization was added.
+ */
+const DocumentPicker = optionalNative('expo-document-picker', () =>
+  require('expo-document-picker') as typeof import('expo-document-picker'));
+const ImagePicker = optionalNative('expo-image-picker', () =>
+  require('expo-image-picker') as typeof import('expo-image-picker'));
+const VideoThumbnails = optionalNative('expo-video-thumbnails', () =>
+  require('expo-video-thumbnails') as typeof import('expo-video-thumbnails'));
+
+function unavailable(feature: string): SourceResult {
+  return { ok: false, failure: { reason: 'unsupported', message: rebuildHint(feature) } };
+}
 
 export type SourceKind =
   /** This handset's own camera, shot in the app. */
@@ -100,6 +118,9 @@ export type SourceResult =
  * mismatch rather than paper over it.
  */
 export async function frameFromVideo(uri: string, atMs = 0): Promise<SourceResult> {
+  if (VideoThumbnails === null) {
+    return unavailable('Reading a frame from a video');
+  }
   try {
     const shot = await VideoThumbnails.getThumbnailAsync(uri, {
       time: atMs,
@@ -131,6 +152,9 @@ export async function frameFromVideo(uri: string, atMs = 0): Promise<SourceResul
 
 /** Shoot the frame with this handset's camera, through the system UI. */
 export async function fromDeviceCamera(): Promise<SourceResult> {
+  if (ImagePicker === null) {
+    return unavailable('The camera');
+  }
   const permission = await ImagePicker.requestCameraPermissionsAsync();
   if (!permission.granted) {
     return {
@@ -156,6 +180,9 @@ export async function fromDeviceCamera(): Promise<SourceResult> {
 
 /** A photo or video already on the phone — where a vendor app leaves things. */
 export async function fromLibrary(): Promise<SourceResult> {
+  if (ImagePicker === null) {
+    return unavailable('Photos on this phone');
+  }
   const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
   if (!permission.granted) {
     return {
@@ -194,6 +221,9 @@ export async function fromLibrary(): Promise<SourceResult> {
  * in both.
  */
 export async function fromFile(): Promise<SourceResult> {
+  if (DocumentPicker === null) {
+    return unavailable('Opening a file');
+  }
   const result = await DocumentPicker.getDocumentAsync({
     type: ['image/*', 'video/*'],
     // Copied into the app's own cache. A SAF content:// URI is revoked when
@@ -239,7 +269,7 @@ function cancelled(): SourceResult {
 }
 
 function fromPickerResult(
-  result: ImagePicker.ImagePickerResult,
+  result: import('expo-image-picker').ImagePickerResult,
   kind: SourceKind,
 ): SourceResult {
   if (result.canceled) {

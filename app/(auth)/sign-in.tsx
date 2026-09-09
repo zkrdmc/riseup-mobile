@@ -456,10 +456,12 @@ export default function SignInScreen() {
           </View>
 
           <View style={styles.footer}>
-            <Row gap={space[1]}>
-              <Body tone={3}>No account?</Body>
-              <Body tone={2}>A club admin invites you from the dashboard.</Body>
-            </Row>
+            {/* One Text, not a Row of two. `Row` does not wrap, so on a
+                narrower handset the second half ran off the right edge and
+                the sentence ended mid-word. */}
+            <Body tone={3}>
+              No account? <Body tone={2}>A club admin invites you from the dashboard.</Body>
+            </Body>
             <Spacer size={space[4]} />
             {/* Reachable before signing in, which is where both stores expect
                 to find them — a reviewer with no account still has to be able

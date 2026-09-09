@@ -121,6 +121,11 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     borderWidth: 1,
     alignSelf: 'flex-start',
+    // `alignSelf: 'flex-start'` sizes the pill to its label, which is right
+    // until the label is long: inside a Row it then pushes whatever sits
+    // beside it off the screen. Shrinking lets the label ellipsise — it
+    // already has numberOfLines={1} — instead of the row overflowing.
+    flexShrink: 1,
   },
   band: {
     flexDirection: 'row',
