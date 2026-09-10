@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { useApi } from '../../../src/api/provider';
-import { useUploadMode } from '../../../src/api/queries';
+import { useMe, useUploadMode } from '../../../src/api/queries';
 import { bytes, duration, when } from '../../../src/lib/format';
 import {
   estimateRemainingMs,
@@ -27,7 +27,7 @@ import {
 } from '../../../src/upload/manager';
 import { line, radius, signal, space, surface } from '../../../src/theme/tokens';
 import { Button } from '../../../src/ui/Button';
-import { Panel, Row, Screen, Spacer } from '../../../src/ui/Layout';
+import { Panel, Row, Rule, Screen, Spacer } from '../../../src/ui/Layout';
 import { Pill, type Tone } from '../../../src/ui/Status';
 import { EmptyState } from '../../../src/ui/State';
 import { Body, BodyStrong, Display, Label, Metric } from '../../../src/ui/Text';
@@ -35,6 +35,7 @@ import { Body, BodyStrong, Display, Label, Metric } from '../../../src/ui/Text';
 export default function UploadsScreen() {
   const api = useApi();
   const uploadMode = useUploadMode();
+  const me = useMe();
 
   const entries = useSyncExternalStore(uploadManager.subscribe, uploadManager.getSnapshot);
 
@@ -42,6 +43,22 @@ export default function UploadsScreen() {
     uri: string; filename: string; mimeType: string; totalBytes: number;
   } | null>(null);
   const [coversOpening, setCoversOpening] = useState(false);
+
+  /**
+   * May RiseUp learn from this footage?
+   *
+   * A SEPARATE PERMISSION FROM THE UPLOAD, and it stays separate. Uploading is
+   * the club buying analysis of their own match. This grants us a licence to
+   * train on it — a different transaction with a different beneficiary. A
+   * consent that is the price of a service which does not need it is not
+   * freely given (GDPR Art. 7(4)), so declining changes nothing: the upload
+   * runs identically and the button never disables.
+   *
+   * Starts UNTICKED and is never remembered between files. A default of yes
+   * would be consent nobody gave, and a sticky answer would be one answer
+   * silently applied to a video it was never asked about.
+   */
+  const [mayTrain, setMayTrain] = useState(false);
 
   useEffect(() => {
     void uploadManager.attach(api);
@@ -79,6 +96,7 @@ export default function UploadsScreen() {
     // whose clock was never set — which is most of them. The operator was
     // standing there and knows. `checkRecordingCoverage` still runs where
     // timestamps are trustworthy; this is the answer for everything else.
+    setMayTrain(false);
     setPending({
       uri: asset.uri,
       filename: asset.fileName ?? `clip-${Date.now()}.mp4`,
@@ -87,6 +105,14 @@ export default function UploadsScreen() {
     });
     setCoversOpening(false);
   }, []);
+
+
+  /* GRANTING A LICENCE OVER THE CLUB'S FOOTAGE BINDS THE CLUB, so only an
+     admin is asked. The operator on the touchline is very often an analyst,
+     and the honest thing is to not put the question in front of somebody
+     whose answer cannot count — the dashboard asks an admin later, on the
+     finished match. */
+  const canConsent = me.data?.role === 'org:admin';
 
   const confirmUpload = useCallback(() => {
     if (pending === null) {
@@ -98,14 +124,20 @@ export default function UploadsScreen() {
       // anything time-based: a match missing its first twenty minutes has no
       // first-fifteen possession, and reporting zero there is a lie.
       coversOpening,
+      // Only sent when this person can actually give it. The server drops an
+      // answer from a non-admin anyway — see `_consent_from` — but sending one
+      // we know will be discarded would make the tick look like it did
+      // something, which is worse than not offering it.
+      trainingConsent: canConsent ? mayTrain : undefined,
     });
     setPending(null);
-  }, [pending, coversOpening]);
+  }, [pending, coversOpening, mayTrain, canConsent]);
 
   // Told, not guessed. A deployment without object storage cannot take a
   // presigned PUT, and finding that out mid-transfer is a 501 halfway through
   // somebody's file.
   const presignedAvailable = uploadMode.data?.presigned ?? true;
+
 
   const active = entries.filter((e) => e.status !== 'uploaded' && e.status !== 'cancelled');
   const finished = entries.filter((e) => e.status === 'uploaded' || e.status === 'cancelled');
@@ -161,6 +193,56 @@ export default function UploadsScreen() {
                   + 'analysed — it is marked so nothing reports figures for the part that was '
                   + 'not filmed.'}
             </Body>
+            {canConsent ? (
+              <>
+                <Spacer size={space[4]} />
+                <Rule />
+                <Spacer size={space[4]} />
+                <Body tone={3} size={13}>
+                  Separately, and only if you want to:
+                </Body>
+                <Spacer size={space[3]} />
+                <Pressable
+                  onPress={() => { setMayTrain((v) => !v); }}
+                  accessibilityRole="checkbox"
+                  accessibilityState={{ checked: mayTrain }}
+                  accessibilityLabel="RiseUp may keep this match to improve its systems"
+                  style={({ pressed }) => [styles.check, pressed ? styles.checkPressed : null]}
+                >
+                  <View style={[styles.box, mayTrain ? styles.boxOn : null]}>
+                    {mayTrain ? <Ionicons name="checkmark" size={16} color={surface.bg0} /> : null}
+                  </View>
+                  <Body style={styles.checkLabel}>
+                    RiseUp may keep this match and learn from it
+                  </Body>
+                </Pressable>
+                <Spacer size={space[2]} />
+                {/* SAYS WHAT IT IS AND WHAT IT IS NOT. The binding text is the
+                    terms; this is the plain-language version and it must not
+                    promise anything those terms do not. */}
+                <Body tone={3} size={13}>
+                  This is not needed to analyse your match, and leaving it unticked changes
+                  nothing about the upload. It lets us keep this video to improve how RiseUp
+                  tracks players. You can change your mind on the match afterwards.
+                </Body>
+              </>
+            ) : null}
+
+            {/* SHOWN TO EVERYONE, NOT ONLY ADMINS. This is not part of the
+                training question — it is about the upload itself, and it
+                applies just as much to a club that ticks nothing. Whoever
+                presses Upload is the person making the representation, and an
+                operator uploading a match is making it as surely as an admin. */}
+            <Spacer size={space[4]} />
+            <Rule />
+            <Spacer size={space[3]} />
+            <Body tone={3} size={12}>
+              By uploading you confirm your club holds the rights to this footage and may
+              share it with us — including any permissions needed for the people who appear
+              in it. If the recording came from a broadcaster, a league feed, or another
+              club&apos;s camera, check before uploading it.
+            </Body>
+
             <Spacer size={space[4]} />
             <Button label="Upload" onPress={confirmUpload} block />
             <Spacer size={space[2]} />

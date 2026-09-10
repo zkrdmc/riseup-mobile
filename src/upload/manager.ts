@@ -100,6 +100,20 @@ export interface UploadEntry {
    * to".
    */
   coversOpening: boolean;
+  /**
+   * May RiseUp keep this footage and learn from it?
+   *
+   * THREE STATES, and `undefined` is load-bearing: it means nobody was asked,
+   * which is NOT the same as a refusal. A refusal is never re-asked, so
+   * recording one the club never made would permanently deny them the choice.
+   * The field is omitted from the request entirely when it is undefined.
+   *
+   * SEPARATE FROM THE UPLOAD AND MUST STAY SEPARATE. Consent that is a
+   * condition of a service which does not need it is not freely given (GDPR
+   * Art. 7(4)) — so nothing on this path may ever read this value to decide
+   * whether to transfer, retry, or confirm.
+   */
+  trainingConsent: boolean | undefined;
 }
 
 type Listener = () => void;
@@ -190,6 +204,7 @@ class UploadManager {
     mimeType: string;
     totalBytes: number;
     coversOpening?: boolean;
+    trainingConsent?: boolean;
   }): string {
     const entry: UploadEntry = {
       id: Crypto.randomUUID(),
@@ -205,6 +220,9 @@ class UploadManager {
       createdAt: new Date().toISOString(),
       elapsedMs: 0,
       coversOpening: input.coversOpening ?? false,
+      // NOT defaulted. `?? false` here would turn "never asked" into a
+      // recorded refusal for every entry queued by a client that does not ask.
+      trainingConsent: input.trainingConsent,
     };
     this.entries = [entry, ...this.entries];
     this.emit();
@@ -303,6 +321,12 @@ class UploadManager {
           // be on the record before extraction is enqueued, or the pipeline
           // reads a job that does not yet know what it is missing.
           covers_opening: entry.coversOpening,
+          // Omitted, not sent as null, when nobody was asked — the server
+          // reads an absent field as "never asked" and a present one as an
+          // answer. See core/jobs.py::_TRISTATE_FIELDS.
+          ...(entry.trainingConsent === undefined
+            ? {}
+            : { training_consent: entry.trainingConsent }),
         },
         { idempotencyKey: entry.idempotencyKey },
       );
