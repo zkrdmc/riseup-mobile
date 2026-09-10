@@ -134,7 +134,21 @@ export interface ChunkSetProblem {
 
 export interface ChunkSetReport {
   ordered: ChunkManifest[];
+  /** Blocking. Any one of these means the set must not be concatenated. */
   problems: ChunkSetProblem[];
+  /**
+   * Findings that do NOT block reassembly, and must travel with the match.
+   *
+   * A recording that starts late is still worth analysing — refusing to process
+   * a club's only footage because it began after kick-off is the wrong trade.
+   * What must not happen is analysing it while believing it covers the whole
+   * match, and then reporting possession for a period the file does not
+   * contain. Missing, not zero.
+   *
+   * So the finding is carried rather than acted on, and it is the reader's
+   * screen that has to show it — see `docs/CHUNKED-UPLOAD-API.md`.
+   */
+  caveats: ChunkSetProblem[];
   /** True when this set can be concatenated into one continuous recording. */
   reassemblable: boolean;
   totalDurationNs: number;
@@ -151,11 +165,13 @@ export interface ChunkSetReport {
  */
 export function verifyChunkSet(chunks: ChunkManifest[]): ChunkSetReport {
   const problems: ChunkSetProblem[] = [];
+  const caveats: ChunkSetProblem[] = [];
 
   if (chunks.length === 0) {
     return {
       ordered: [],
       problems: [{ code: 'EMPTY', message: 'No chunks were recorded.', sequences: [] }],
+      caveats: [],
       reassemblable: false,
       totalDurationNs: 0,
       totalBytes: 0,
@@ -241,7 +257,7 @@ export function verifyChunkSet(chunks: ChunkManifest[]): ChunkSetReport {
   const first = ordered[0] as ChunkManifest;
   if (first.sequence === 0 && first.startPtsNs > MAX_START_DELAY_NS) {
     const lateSeconds = first.startPtsNs / 1e9;
-    problems.push({
+    caveats.push({
       code: 'STARTED_IN_PLAY',
       message:
         `Recording began ${formatDelay(lateSeconds)} after the session was armed, so the ` +
@@ -265,6 +281,8 @@ export function verifyChunkSet(chunks: ChunkManifest[]): ChunkSetReport {
   return {
     ordered,
     problems,
+    caveats,
+    // Caveats deliberately do not count. They are carried, not enforced.
     reassemblable: problems.length === 0,
     totalDurationNs: last.endPtsNs - first.startPtsNs,
     totalBytes: ordered.reduce((n, c) => n + c.byteLength, 0),

@@ -11,8 +11,9 @@
  * one — see `estimateRemainingMs`.
  */
 
+import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useState, useSyncExternalStore } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 
 import { useApi } from '../../../src/api/provider';
@@ -24,7 +25,7 @@ import {
   uploadManager,
   type UploadEntry,
 } from '../../../src/upload/manager';
-import { radius, signal, space, surface } from '../../../src/theme/tokens';
+import { line, radius, signal, space, surface } from '../../../src/theme/tokens';
 import { Button } from '../../../src/ui/Button';
 import { Panel, Row, Screen, Spacer } from '../../../src/ui/Layout';
 import { Pill, type Tone } from '../../../src/ui/Status';
@@ -36,6 +37,11 @@ export default function UploadsScreen() {
   const uploadMode = useUploadMode();
 
   const entries = useSyncExternalStore(uploadManager.subscribe, uploadManager.getSnapshot);
+
+  const [pending, setPending] = useState<{
+    uri: string; filename: string; mimeType: string; totalBytes: number;
+  } | null>(null);
+  const [coversOpening, setCoversOpening] = useState(false);
 
   useEffect(() => {
     void uploadManager.attach(api);
@@ -68,13 +74,33 @@ export default function UploadsScreen() {
       return;
     }
 
-    uploadManager.enqueue({
+    // ASKED, NOT INFERRED. A file's creation time is the only automatic clue
+    // that footage begins after kick-off, and it is worthless on a camcorder
+    // whose clock was never set — which is most of them. The operator was
+    // standing there and knows. `checkRecordingCoverage` still runs where
+    // timestamps are trustworthy; this is the answer for everything else.
+    setPending({
       uri: asset.uri,
       filename: asset.fileName ?? `clip-${Date.now()}.mp4`,
       mimeType: asset.mimeType ?? 'video/mp4',
       totalBytes: asset.fileSize ?? 0,
     });
+    setCoversOpening(false);
   }, []);
+
+  const confirmUpload = useCallback(() => {
+    if (pending === null) {
+      return;
+    }
+    uploadManager.enqueue({
+      ...pending,
+      // Travels with the upload. Analysis needs to know before it reports
+      // anything time-based: a match missing its first twenty minutes has no
+      // first-fifteen possession, and reporting zero there is a lie.
+      coversOpening,
+    });
+    setPending(null);
+  }, [pending, coversOpening]);
 
   // Told, not guessed. A deployment without object storage cannot take a
   // presigned PUT, and finding that out mid-transfer is a 501 halfway through
@@ -86,6 +112,7 @@ export default function UploadsScreen() {
 
   return (
     <Screen scroll>
+
       <Spacer size={space[4]} />
       <Display>Uploads</Display>
       <Spacer size={space[2]} />
@@ -102,6 +129,50 @@ export default function UploadsScreen() {
         block
       />
 
+      {pending === null ? null : (
+        <>
+          <Spacer size={space[4]} />
+          <Panel>
+            <BodyStrong numberOfLines={1}>{pending.filename}</BodyStrong>
+            <Spacer size={space[2]} />
+            <Body tone={3} size={13}>
+              Before this is processed: does the recording start before kick-off?
+            </Body>
+            <Spacer size={space[3]} />
+            <Pressable
+              onPress={() => { setCoversOpening((v) => !v); }}
+              accessibilityRole="checkbox"
+              accessibilityState={{ checked: coversOpening }}
+              accessibilityLabel="This recording starts before kick-off"
+              style={({ pressed }) => [styles.check, pressed ? styles.checkPressed : null]}
+            >
+              <View style={[styles.box, coversOpening ? styles.boxOn : null]}>
+                {coversOpening ? <Ionicons name="checkmark" size={16} color={surface.bg0} /> : null}
+              </View>
+              <Body style={styles.checkLabel}>
+                The recording starts at or before kick-off
+              </Body>
+            </Pressable>
+            <Spacer size={space[3]} />
+            <Body tone={3} size={13}>
+              {coversOpening
+                ? 'The whole match will be measured.'
+                : 'Leave this unticked if filming began after play started. The footage is still '
+                  + 'analysed — it is marked so nothing reports figures for the part that was '
+                  + 'not filmed.'}
+            </Body>
+            <Spacer size={space[4]} />
+            <Button label="Upload" onPress={confirmUpload} block />
+            <Spacer size={space[2]} />
+            <Button
+              label="Cancel"
+              onPress={() => { setPending(null); }}
+              variant="secondary"
+              block
+            />
+          </Panel>
+        </>
+      )}
       {presignedAvailable ? null : (
         <>
           <Spacer size={space[3]} />
@@ -281,6 +352,32 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   spacerFlex: {
+    flex: 1,
+  },
+  check: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
+  },
+  checkPressed: {
+    opacity: 0.7,
+  },
+  box: {
+    width: 24,
+    height: 24,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: line.borderHi,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  boxOn: {
+    backgroundColor: signal.base,
+    borderColor: signal.base,
+  },
+  checkLabel: {
+    // Without this the label runs off the right edge instead of wrapping —
+    // `Text` in a row does not shrink on its own.
     flex: 1,
   },
   track: {

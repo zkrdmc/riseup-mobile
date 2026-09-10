@@ -116,6 +116,19 @@ export async function openSession(
     cameras: SessionCamera[];
     startedAt: string;
     appVersion: string;
+    /**
+     * Is the phone rolling at or before kick-off? REQUIRED, and asked of the
+     * operator rather than inferred.
+     *
+     * The PTS clock can prove chunks abut each other; it cannot prove the
+     * first chunk begins at kick-off, because it has no idea when kick-off
+     * was. Nothing on the device does. The person holding it does.
+     *
+     * A warning, not a refusal — see `caveats` on ChunkSetReport. Recording
+     * that starts mid-match is still worth having; it must not be reported as
+     * if it were a whole match.
+     */
+    coversOpening: boolean;
     rigId?: string | null;
     venueId?: string | null;
     pitchId?: string | null;
@@ -125,6 +138,7 @@ export async function openSession(
     cameras: input.cameras,
     startedAt: input.startedAt,
     appVersion: input.appVersion,
+    coversOpening: input.coversOpening,
     rigId: input.rigId ?? null,
     venueId: input.venueId ?? null,
     pitchId: input.pitchId ?? null,

@@ -83,6 +83,23 @@ export interface UploadEntry {
   createdAt: string;
   /** Wall-clock ms of transfer so far — the basis of the time estimate. */
   elapsedMs: number;
+  /**
+   * Does this footage start at or before kick-off? ASKED, NOT INFERRED.
+   *
+   * A file's creation time is the only automatic clue, and it is worthless on
+   * a camcorder whose clock was never set, which is most of them. The operator
+   * was standing there and knows.
+   *
+   * It is a WARNING, NOT A REFUSAL. Footage that begins after play started is
+   * still analysed — the flag travels with the job so nothing downstream
+   * reports a first-fifteen figure for minutes that were never filmed. Missing
+   * is not zero.
+   *
+   * `false` on entries queued before this field existed, which is the safe
+   * reading: it means "not asserted to cover the opening", not "asserted not
+   * to".
+   */
+  coversOpening: boolean;
 }
 
 type Listener = () => void;
@@ -167,7 +184,13 @@ class UploadManager {
 
   /* ── Queue operations ─────────────────────────────────────────────────── */
 
-  enqueue(input: { uri: string; filename: string; mimeType: string; totalBytes: number }): string {
+  enqueue(input: {
+    uri: string;
+    filename: string;
+    mimeType: string;
+    totalBytes: number;
+    coversOpening?: boolean;
+  }): string {
     const entry: UploadEntry = {
       id: Crypto.randomUUID(),
       uri: input.uri,
@@ -181,6 +204,7 @@ class UploadManager {
       error: null,
       createdAt: new Date().toISOString(),
       elapsedMs: 0,
+      coversOpening: input.coversOpening ?? false,
     };
     this.entries = [entry, ...this.entries];
     this.emit();
@@ -272,7 +296,14 @@ class UploadManager {
     try {
       const presigned = await api.post<UploadUrlResponse>(
         paths.uploadUrl,
-        { filename: entry.filename, content_type: entry.mimeType },
+        {
+          filename: entry.filename,
+          content_type: entry.mimeType,
+          // Travels with the job at MINT time, not at confirm: the flag has to
+          // be on the record before extraction is enqueued, or the pipeline
+          // reads a job that does not yet know what it is missing.
+          covers_opening: entry.coversOpening,
+        },
         { idempotencyKey: entry.idempotencyKey },
       );
 

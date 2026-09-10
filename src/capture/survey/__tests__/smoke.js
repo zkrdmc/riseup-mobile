@@ -1111,20 +1111,40 @@ console.log('24. Footage that starts with the match already under way');
     make(2, { startPtsNs: 1800 * SEC, endPtsNs: 2100 * SEC, final: true }),
   ];
   const r = chunks.verifyChunkSet(late);
-  check('a late start is caught', r.problems.some((p) => p.code === 'STARTED_IN_PLAY'),
-        r.problems.map((p) => p.code).join(',') || 'none');
+  check('a late start is caught', r.caveats.some((p) => p.code === 'STARTED_IN_PLAY'),
+        r.caveats.map((p) => p.code).join(',') || 'none');
   check('and it is NOT reported as a gap or a missing chunk',
         !r.problems.some((p) => ['TIME_GAP', 'MISSING_SEQUENCE'].includes(p.code)),
         'the chunks themselves are continuous');
   check('the message says how much is missing, in minutes',
-        (r.problems.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.includes('20 min'),
-        (r.problems.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.slice(0, 46));
+        (r.caveats.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.includes('20 min'),
+        (r.caveats.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.slice(0, 46));
+
+  // ── A WARNING, NOT A REFUSAL, and this is the pair that pins it down ──
+  // Footage that begins in the 12th minute is worth analysing. It must simply
+  // never be reported as a whole match. If STARTED_IN_PLAY were a problem, a
+  // rig that armed late would have its whole match refused at `complete` --
+  // ninety minutes of perfectly good footage thrown away over a caveat.
+  check('a late start does NOT block reassembly', r.reassemblable === true,
+        `problems=${r.problems.length} caveats=${r.caveats.length}`);
+  check('and it is a caveat, never a problem',
+        !r.problems.some((p) => p.code === 'STARTED_IN_PLAY'));
 
   // A normal start must not trip it -- a couple of seconds of arming is fine.
   const prompt = [make(0, { startPtsNs: 2 * SEC, endPtsNs: 302 * SEC }),
                   make(1, { startPtsNs: 302 * SEC, endPtsNs: 602 * SEC, final: true })];
+  const pr = chunks.verifyChunkSet(prompt);
   check('two seconds of arming delay is not flagged',
-        !chunks.verifyChunkSet(prompt).problems.some((p) => p.code === 'STARTED_IN_PLAY'));
+        !pr.caveats.some((p) => p.code === 'STARTED_IN_PLAY'));
+  check('and a clean set carries no caveats at all', pr.caveats.length === 0,
+        pr.caveats.map((p) => p.code).join(',') || 'none');
+
+  // A set that genuinely cannot be reassembled must still be refused. The
+  // caveat split must not have made anything permissive.
+  const gapped = [make(0), make(2, { final: true })];
+  const gr = chunks.verifyChunkSet(gapped);
+  check('a real gap still blocks reassembly', gr.reassemblable === false,
+        gr.problems.map((p) => p.code).join(',') || 'none');
 
   // ── The same question for a whole-file upload, which has no chunks ──
   const cov = (o) => chunks.checkRecordingCoverage(o);
