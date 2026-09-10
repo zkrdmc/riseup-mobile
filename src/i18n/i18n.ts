@@ -86,7 +86,63 @@ export function matchDeviceLocale(deviceLocales: readonly string[]): Locale {
 
 export type Dict = Record<string, string>;
 
-export const i18n = new I18n({ en, fr, ar });
+/**
+ * Flat dotted keys → the nested object i18n-js actually reads.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ *  THIS BOUNDARY IS NOT OPTIONAL, AND ITS ABSENCE BROKE EVERY STRING
+ * ══════════════════════════════════════════════════════════════════════════
+ * Our dictionaries hold FLAT keys — the literal string `'tabs.matches'` — to
+ * match the website's format, which is the whole point of sharing one.
+ * i18n-js reads a dot as a PATH: `t('tabs.matches')` looks for `en.tabs`, then
+ * `.matches` inside it. Handed the flat object it finds neither and returns
+ * `[missing "en.tabs.matches" translation]`.
+ *
+ * So every one of the 62 keys resolved to a placeholder, in every locale, and
+ * the app shipped with `[MISSING…` under all five tabs. It survived because
+ * the smoke suite compared dictionaries to each other — parity, orphans,
+ * placeholder agreement — and never once called `translate()`. Two dictionaries
+ * can agree perfectly and both be unreadable.
+ *
+ * The expansion happens here rather than in `dictionaries.ts` so the source
+ * format stays the website's, and so there is exactly one place where the two
+ * conventions meet.
+ */
+function expand(flat: Dict): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(flat)) {
+    const parts = key.split('.');
+    let node = out;
+    for (let i = 0; i < parts.length - 1; i += 1) {
+      const part = parts[i] as string;
+      const existing = node[part];
+      if (typeof existing !== 'object' || existing === null) {
+        // A key that is both a leaf and a branch — 'a.b' next to 'a.b.c' —
+        // cannot be represented. Last one wins rather than throwing, because
+        // a dictionary problem must not stop the app starting; `collisions`
+        // below is what surfaces it.
+        node[part] = {};
+      }
+      node = node[part] as Record<string, unknown>;
+    }
+    node[parts[parts.length - 1] as string] = value;
+  }
+  return out;
+}
+
+/**
+ * Keys that cannot survive expansion because one is a prefix of another.
+ *
+ * `'match.title'` beside `'match.title.short'` needs `match.title` to be both
+ * a string and an object. Reported so the smoke suite can refuse it, rather
+ * than discovered as one string silently missing.
+ */
+export function collisions(dict: Dict = en): string[] {
+  const keys = Object.keys(dict);
+  return keys.filter((k) => keys.some((other) => other !== k && other.startsWith(k + '.')));
+}
+
+export const i18n = new I18n({ en: expand(en), fr: expand(fr), ar: expand(ar) });
 
 /**
  * Match the website's `{placeholder}` syntax.

@@ -16,6 +16,7 @@ const visibility = require('../../../../.smoke/capture/framing/visibility');
 const detector = require('../../../../.smoke/capture/framing/detector');
 const pair = require('../../../../.smoke/capture/framing/pair');
 const dicts = require('../../../../.smoke/i18n/dictionaries');
+const i18nmod = require('../../../../.smoke/i18n/i18n');
 const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
@@ -1038,6 +1039,56 @@ console.log('22. Aligning on the referee, not on our own chirp');
      { deviceId: 'B', atSeconds: 2 + flight, distanceM: 30, peakRatio: 20 }], 'A');
   check('the chirp resolves the same 30 m rig to zero, because the source is known',
         Math.abs(viaChirp.find((o) => o.deviceId === 'B').offsetSeconds) < 0.0005);
+}
+
+console.log('');
+console.log('23. Translations that actually resolve');
+{
+  // THE GAP THAT LET `[MISSING...]` SHIP UNDER ALL FIVE TABS. Section 17
+  // compares the dictionaries to each other -- parity, orphans, placeholder
+  // agreement -- and never calls translate(). Two dictionaries can agree
+  // perfectly and both be unreadable, which is exactly what happened: flat
+  // dotted keys handed to i18n-js, which reads a dot as a path.
+  const missing = [];
+  for (const loc of ['en', 'fr', 'ar']) {
+    i18nmod.setActiveLocale(loc);
+    for (const key of Object.keys(dicts.en)) {
+      const out = i18nmod.translate(key);
+      // Match the MISSING TRANSLATION marker specifically -- i18n-js writes
+      // `[missing "en.x.y" translation]`. A looser test for the word "missing"
+      // also catches `[missing {email} value]`, which is a key that resolved
+      // fine and was simply called without its variables here.
+      if (typeof out !== 'string' || /missing ".*" translation/.test(out)) {
+        missing.push(loc + ':' + key);
+      }
+    }
+  }
+  i18nmod.setActiveLocale('en');
+  check('every key resolves in every locale', missing.length === 0,
+        missing.length === 0 ? (Object.keys(dicts.en).length * 3) + ' lookups'
+                             : missing.length + ' unresolved, e.g. ' + missing[0]);
+
+  check('a tab label is the actual word', i18nmod.translate('tabs.matches') === dicts.en['tabs.matches'],
+        JSON.stringify(i18nmod.translate('tabs.matches')));
+
+  i18nmod.setActiveLocale('fr');
+  check('and it changes with the locale', i18nmod.translate('tabs.matches') === dicts.fr['tabs.matches'],
+        JSON.stringify(i18nmod.translate('tabs.matches')));
+  i18nmod.setActiveLocale('en');
+
+  // No key may be a prefix of another, or expansion cannot represent both.
+  const clash = i18nmod.collisions(dicts.en);
+  check('no key is a prefix of another', clash.length === 0, clash.join(',') || 'none');
+
+  // Placeholders must interpolate, not render literally.
+  const withVar = Object.keys(dicts.en).find((k) => /\{\w+\}/.test(dicts.en[k]));
+  if (withVar) {
+    const name = /\{(\w+)\}/.exec(dicts.en[withVar])[1];
+    const out = i18nmod.translate(withVar, { [name]: 'XYZZY' });
+    check('placeholders interpolate rather than printing braces',
+          out.includes('XYZZY') && !out.includes('{' + name + '}'),
+          withVar + ' -> ' + out.slice(0, 40));
+  }
 }
 
 console.log(`\n${'='.repeat(60)}`);
