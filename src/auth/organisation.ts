@@ -44,8 +44,21 @@ export interface ClubOption {
 export type OrganisationState =
   /** Clerk has not finished loading memberships. */
   | { status: 'loading' }
-  /** An organisation is active; the token will carry `org_id`. */
-  | { status: 'active' }
+  /**
+   * An organisation is active; the token will carry `org_id`.
+   *
+   * `options` rides along so a screen can offer a SWITCH. Before this, the
+   * chooser was reachable only at sign-in: once an org was active the hook
+   * returned a bare `active` and the only way to change club was to sign out.
+   * A user who coaches two clubs was stuck in whichever one the session
+   * landed on — and roles are per organisation, so that also silently decided
+   * what they were allowed to do.
+   *
+   * One entry means one club, which is nearly everybody. A caller showing a
+   * switch must check the length: a picker with a single option is a control
+   * that teaches a concept for no reason.
+   */
+  | { status: 'active'; options: ClubOption[]; activeId: string }
   /** Memberships exist and one is being activated. */
   | { status: 'activating' }
   /** More than one club, and nobody has said which. */
@@ -161,7 +174,7 @@ export function useOrganisation(): {
     return { state: { status: 'loading' }, activate };
   }
   if (orgId !== null && orgId !== undefined) {
-    return { state: { status: 'active' }, activate };
+    return { state: { status: 'active', options, activeId: orgId }, activate };
   }
   if (activating || (memberships.length === 1 && attempted.current !== null)) {
     return { state: { status: 'activating' }, activate };

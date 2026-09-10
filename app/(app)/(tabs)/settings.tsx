@@ -27,6 +27,7 @@ import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { paths } from '../../../src/api/endpoints';
 import { useApi } from '../../../src/api/provider';
 import { useMe } from '../../../src/api/queries';
+import { useOrganisation, type ClubOption } from '../../../src/auth/organisation';
 import { useAppRole, type AppRole } from '../../../src/auth/role';
 import { cameraStore } from '../../../src/capture/devices/store';
 import { surveyDraft } from '../../../src/capture/survey/draft';
@@ -55,6 +56,16 @@ export default function SettingsScreen() {
   const router = useRouter();
   const me = useMe();
   const { role, setRole } = useAppRole();
+
+  /* THE CHOOSER ALREADY EXISTED AND WAS UNREACHABLE. `useOrganisation` offers
+     a club list at sign-in and then never again, so somebody who coaches two
+     clubs was stuck in whichever one the session landed on — and roles are per
+     organisation, so that also silently decided what they were allowed to do.
+     Nothing here is new machinery; it is the same `activate` the sign-in
+     screen calls, given a way in. */
+  const { state: org, activate } = useOrganisation();
+  const clubs = org.status === 'active' ? org.options : [];
+  const [switching, setSwitching] = useState(false);
   const { t, locale, setLocale, syncPending } = useI18n();
   const [deleting, setDeleting] = useState(false);
 
@@ -149,10 +160,81 @@ export default function SettingsScreen() {
         <Rule />
         {/* The club NAME is not in `GET /me` — it returns the Clerk org id and
             nothing human. Showing the id is honest; inventing a name is not. */}
-        <Field label="Club" value={me.data?.club_id ?? '—'} mono />
+        {/* ONE CLUB STAYS A PLAIN ROW. A picker with a single option is a
+            control that teaches a concept for no reason — the whole point of
+            the auto-activation in useOrganisation is that a coach never has to
+            learn what an organisation is. */}
+        {clubs.length > 1 ? (
+          <Pressable
+            onPress={() => { setSwitching(true); }}
+            accessibilityRole="button"
+            accessibilityLabel="Change club"
+            accessibilityHint={`You are in ${clubs.length} clubs. Opens a list to switch.`}
+            style={({ pressed }) => [styles.field, pressed ? styles.rowPressed : null]}
+          >
+            <Row>
+              <View style={styles.fieldMain}>
+                <Label>Club</Label>
+                <Spacer size={space[1]} />
+                <Body numberOfLines={1}>{clubName(clubs, org, me.data?.club_id)}</Body>
+              </View>
+              <Label tone={3}>Change</Label>
+            </Row>
+          </Pressable>
+        ) : (
+          <Field label="Club" value={me.data?.club_id ?? '—'} mono />
+        )}
         <Rule />
         <Field label="Dashboard role" value={roleLabel(me.data?.role)} />
       </Panel>
+
+      {switching ? (
+        <>
+          <Spacer size={space[3]} />
+          <Panel>
+            <Label>Switch club</Label>
+            <Spacer size={space[2]} />
+            {/* SAID OUT LOUD, because it is not obvious and it is the reason
+                the same person sees different things in two clubs: what you
+                may do is granted per club, not per account. */}
+            <Body tone={3} size={13}>
+              Everything — matches, players, pitches, and what you are allowed to change — belongs
+              to the club you are in.
+            </Body>
+            <Spacer size={space[3]} />
+            {clubs.map((club) => {
+              const current = club.id === (org.status === 'active' ? org.activeId : '');
+              return (
+                <Pressable
+                  key={club.id}
+                  onPress={() => {
+                    setSwitching(false);
+                    if (!current) {
+                      activate(club.id);
+                    }
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: current }}
+                  accessibilityLabel={club.name}
+                  style={({ pressed }) => [styles.clubRow, pressed ? styles.rowPressed : null]}
+                >
+                  <Body style={styles.clubName} numberOfLines={1}>{club.name}</Body>
+                  {current ? (
+                    <Ionicons name="checkmark" size={18} color={signal.base} />
+                  ) : null}
+                </Pressable>
+              );
+            })}
+            <Spacer size={space[3]} />
+            <Button
+              label="Cancel"
+              onPress={() => { setSwitching(false); }}
+              variant="ghost"
+              block
+            />
+          </Panel>
+        </>
+      ) : null}
 
       <Spacer size={space[6]} />
       <Label>This device</Label>
@@ -361,6 +443,23 @@ function roleLabel(role: string | undefined): string {
   }
 }
 
+/**
+ * The club's NAME, from Clerk, falling back to the id from `/me`.
+ *
+ * `/me` returns the organisation id and nothing human — the name exists only
+ * on the Clerk membership. Showing the id when there is no name is honest;
+ * inventing one is not.
+ */
+function clubName(
+  clubs: ClubOption[],
+  org: { status: string; activeId?: string },
+  fallbackId: string | undefined,
+): string {
+  const activeId = org.status === 'active' ? org.activeId : undefined;
+  const match = clubs.find((c) => c.id === activeId);
+  return match?.name ?? fallbackId ?? '—';
+}
+
 function Field({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <View style={styles.field}>
@@ -459,6 +558,24 @@ const styles = StyleSheet.create({
   },
   destructivePressed: {
     backgroundColor: roleColor.red.border,
+  },
+  fieldMain: {
+    // Without this the name pushes "Change" off the right edge on a long club
+    // name instead of ellipsising.
+    flex: 1,
+  },
+  rowPressed: {
+    opacity: 0.7,
+  },
+  clubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[3],
+    minHeight: minTouchTarget,
+    paddingVertical: space[2],
+  },
+  clubName: {
+    flex: 1,
   },
   field: {
     paddingVertical: space[3],
