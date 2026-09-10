@@ -72,6 +72,8 @@ export function useOrganisation(): {
   });
 
   const [activating, setActivating] = useState(false);
+  /** Guards the one-shot revalidate below against firing on every render. */
+  const revalidated = useRef(false);
   // Guards against re-activating on every render while Clerk propagates the
   // change: `orgId` does not update synchronously after `setActive` resolves.
   const attempted = useRef<string | null>(null);
@@ -112,6 +114,24 @@ export function useOrganisation(): {
       setActivating(false);
     });
   };
+
+  // A membership granted while this device was signed in -- an admin adding
+  // somebody from the dashboard, which is how every club is provisioned -- does
+  // not reach the client on its own. Clerk caches the organisation list on the
+  // session, so the app keeps reporting the state it had at sign-in and the
+  // member is told they are in no club until they sign out and back in. That is
+  // exactly the instruction the NoClub screen gives, and it is the wrong one.
+  //
+  // One revalidation per mount, not a subscription: the list changes when an
+  // admin acts, which is rare, and polling it would cost a request on every
+  // screen for a state that almost never moves.
+  useEffect(() => {
+    if (!listLoaded || revalidated.current) {
+      return;
+    }
+    revalidated.current = true;
+    void userMemberships?.revalidate?.();
+  }, [listLoaded, userMemberships]);
 
   useEffect(() => {
     if (!authLoaded || !listLoaded || setActive === undefined) {
