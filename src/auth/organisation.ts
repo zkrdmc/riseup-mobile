@@ -78,6 +78,24 @@ export function useOrganisation(): {
 
   const memberships = userMemberships?.data ?? [];
 
+  /**
+   * Has the membership list actually been fetched?
+   *
+   * `useOrganizationList().isLoaded` reports that the HOOK is ready, not that
+   * the paginated resource behind it has arrived — `userMemberships` opts in to
+   * its own fetch, and until that lands `data` is an empty array. Treating
+   * "loaded and empty" as final showed "You are not in a club yet" to a member
+   * of two clubs, for as long as the request took.
+   *
+   * That screen is the worst possible thing to show wrongly: it tells somebody
+   * correctly invited that they have no access, and the suggested fix — sign
+   * out and back in — makes it happen again.
+   */
+  const membershipsSettled =
+    userMemberships !== undefined &&
+    userMemberships.isLoading === false &&
+    userMemberships.isFetching === false;
+
   const options: ClubOption[] = memberships.map((m) => ({
     id: m.organization.id,
     // A club with no name set falls back to its id rather than an empty row.
@@ -133,6 +151,11 @@ export function useOrganisation(): {
   }
   if (memberships.length === 1) {
     return { state: { status: 'activating' }, activate };
+  }
+  // Empty AND settled is a genuine orphan. Empty and still fetching is a
+  // request in flight, and saying "none" there is a lie with consequences.
+  if (!membershipsSettled) {
+    return { state: { status: 'loading' }, activate };
   }
   return { state: { status: 'none' }, activate };
 }

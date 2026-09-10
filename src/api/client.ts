@@ -143,7 +143,7 @@ export class ApiClient {
       // A TypeError from fetch is the platform's way of saying "no network".
       // An AbortError is our own timeout. Both are the same thing to a caller
       // standing at a ground with no signal: not the server's fault, retryable.
-      throw new OfflineError();
+      throw new OfflineError(this.hostLabel());
     } finally {
       clearTimeout(timer);
     }
@@ -170,6 +170,12 @@ export class ApiClient {
     }
 
     return payload as T;
+  }
+
+  /** Host and port of `baseUrl`, for an error that says what it could not reach. */
+  private hostLabel(): string {
+    const withoutScheme = this.baseUrl.replace(/^https?:\/\//, '');
+    return withoutScheme.split('/')[0] ?? this.baseUrl;
   }
 
   get<T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<T> {
@@ -228,7 +234,7 @@ export class ApiClient {
         signal: controller.signal,
       });
     } catch {
-      throw new OfflineError();
+      throw new OfflineError(this.hostLabel());
     } finally {
       clearTimeout(timer);
     }

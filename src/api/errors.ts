@@ -54,10 +54,27 @@ export class ApiError extends Error {
 
 /** Raised when the device has no usable connection. Not a server failure. */
 export class OfflineError extends ApiError {
-  constructor() {
+  /**
+   * `host` names what could not be reached, and it earns its place.
+   *
+   * "No connection" is right at a ground with no signal and actively
+   * misleading when the phone has four bars and the API URL points at a LAN
+   * address it cannot route to — a misconfigured `EXPO_PUBLIC_API_URL`, a
+   * laptop on a different network, a firewall on the port. Both look identical
+   * to `fetch`, and both produced the same sentence, so the wrong one sent
+   * somebody hunting for signal for an afternoon.
+   *
+   * Naming the host does not distinguish the two cases either, but it puts the
+   * one fact on screen that tells them apart the moment somebody reads it.
+   */
+  constructor(host?: string) {
     super({
       code: 'offline',
-      message: 'No connection. This will retry when you are back online.',
+      message:
+        host === undefined
+          ? 'No connection. This will retry when you are back online.'
+          : `Could not reach ${host}. If you have signal, check the app is pointed at the ` +
+            `right server.`,
       status: 0,
       retryable: true,
     });
