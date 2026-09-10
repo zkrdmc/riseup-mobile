@@ -1091,6 +1091,74 @@ console.log('23. Translations that actually resolve');
   }
 }
 
+console.log('');
+console.log('24. Footage that starts with the match already under way');
+{
+  const SEC = 1e9;
+  const make = (seq, opts) => Object.assign({
+    sessionId: 's1', deviceId: 'd1', role: 'solo', sequence: seq,
+    startPtsNs: seq * 300 * SEC, endPtsNs: (seq + 1) * 300 * SEC,
+    frameCount: 9000, sha256: 'x'.repeat(64), byteLength: 1000,
+    recordedAt: '2026-09-10T15:00:00Z', appVersion: '1.0.0', final: false,
+  }, opts);
+
+  // THE HOLE THE CONTINUITY CHECK CANNOT SEE. Chunks numbered from zero,
+  // perfectly abutting, hashing cleanly -- and recording began 20 minutes
+  // after the rig was armed, so the opening is simply absent.
+  const late = [
+    make(0, { startPtsNs: 1200 * SEC, endPtsNs: 1500 * SEC }),
+    make(1, { startPtsNs: 1500 * SEC, endPtsNs: 1800 * SEC }),
+    make(2, { startPtsNs: 1800 * SEC, endPtsNs: 2100 * SEC, final: true }),
+  ];
+  const r = chunks.verifyChunkSet(late);
+  check('a late start is caught', r.problems.some((p) => p.code === 'STARTED_IN_PLAY'),
+        r.problems.map((p) => p.code).join(',') || 'none');
+  check('and it is NOT reported as a gap or a missing chunk',
+        !r.problems.some((p) => ['TIME_GAP', 'MISSING_SEQUENCE'].includes(p.code)),
+        'the chunks themselves are continuous');
+  check('the message says how much is missing, in minutes',
+        (r.problems.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.includes('20 min'),
+        (r.problems.find((p) => p.code === 'STARTED_IN_PLAY') || {}).message.slice(0, 46));
+
+  // A normal start must not trip it -- a couple of seconds of arming is fine.
+  const prompt = [make(0, { startPtsNs: 2 * SEC, endPtsNs: 302 * SEC }),
+                  make(1, { startPtsNs: 302 * SEC, endPtsNs: 602 * SEC, final: true })];
+  check('two seconds of arming delay is not flagged',
+        !chunks.verifyChunkSet(prompt).problems.some((p) => p.code === 'STARTED_IN_PLAY'));
+
+  // ── The same question for a whole-file upload, which has no chunks ──
+  const cov = (o) => chunks.checkRecordingCoverage(o);
+
+  check('an upload starting 25 min after kick-off is flagged',
+        cov({ kickoffAt: '2026-09-10T15:00:00Z', recordingStartedAt: '2026-09-10T15:25:00Z' })
+          .verdict === 'starts_in_play');
+  check('and says what is missing rather than the arithmetic',
+        cov({ kickoffAt: '2026-09-10T15:00:00Z', recordingStartedAt: '2026-09-10T15:25:00Z' })
+          .message.includes('25 min'));
+  check('an upload starting before kick-off is fine',
+        cov({ kickoffAt: '2026-09-10T15:00:00Z', recordingStartedAt: '2026-09-10T14:52:00Z' })
+          .verdict === 'covers_opening');
+  check('a minute of clock drift is tolerated',
+        cov({ kickoffAt: '2026-09-10T15:00:00Z', recordingStartedAt: '2026-09-10T15:01:00Z' })
+          .verdict === 'covers_opening');
+
+  // An untrusted camera clock must produce "unknown", never a confident lie.
+  check('an untrusted camera clock yields unknown, not a false alarm',
+        cov({ kickoffAt: '2026-09-10T15:00:00Z', recordingStartedAt: '2026-09-10T19:00:00Z',
+              clockTrusted: false }).verdict === 'unknown');
+  check('and no kick-off time also yields unknown',
+        cov({ kickoffAt: null, recordingStartedAt: '2026-09-10T15:25:00Z' }).verdict === 'unknown');
+  check('an unreadable timestamp yields unknown rather than NaN',
+        cov({ kickoffAt: 'not-a-date', recordingStartedAt: '2026-09-10T15:25:00Z' })
+          .verdict === 'unknown');
+
+  // A late start AND a short file is a different conversation.
+  const both = cov({ kickoffAt: '2026-09-10T15:00:00Z',
+                     recordingStartedAt: '2026-09-10T15:25:00Z', durationSeconds: 20 * 60 });
+  check('a late start that is also short says so', both.message.includes('20 min long'),
+        both.message.slice(-58));
+}
+
 console.log(`\n${'='.repeat(60)}`);
 console.log(`  ${pass} passed, ${fail} failed`);
 console.log('='.repeat(60));

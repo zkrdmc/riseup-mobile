@@ -75,6 +75,18 @@ export const paths = {
   cameraLensDelete: (cameraId: string, lensId: string) =>
     `${V1}/cameras/${cameraId}/lenses/${lensId}`,
 
+  /* ── Chunked capture — BUILT ──
+     Recording is uploaded in segments DURING the match, so the phone never
+     holds more than a couple of minutes. See docs/CHUNKED-UPLOAD-API.md. */
+  captureSessions: `${V1}/capture/sessions`,
+  captureSession: (sessionId: string) => `${V1}/capture/sessions/${sessionId}`,
+  captureChunks: (sessionId: string) => `${V1}/capture/sessions/${sessionId}/chunks`,
+  /** Confirms the server re-hashed the bytes. The ONLY thing that frees the file. */
+  captureChunkUploaded: (sessionId: string, role: string, sequence: number) =>
+    `${V1}/capture/sessions/${sessionId}/chunks/${role}/${sequence}/uploaded`,
+  captureComplete: (sessionId: string) => `${V1}/capture/sessions/${sessionId}/complete`,
+  captureAbandon: (sessionId: string) => `${V1}/capture/sessions/${sessionId}/abandon`,
+
   /* ── NOT YET BUILT — see docs/BACKEND-GAPS.md ─────────────────────────────
      Calling any of these today returns 404. They are the v0.1 and v0.2
      backend work, written down at the shape the client expects.
