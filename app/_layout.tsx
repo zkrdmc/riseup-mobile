@@ -8,8 +8,8 @@
  * logging you out and back in.
  */
 
-import { ClerkProvider, useAuth } from '@clerk/expo';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { ClerkProvider } from '@clerk/expo';
+import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
@@ -81,9 +81,6 @@ import { surface } from '../src/theme/tokens';
  */
 
 function RootNavigator() {
-  const { isLoaded, isSignedIn } = useAuth();
-  const segments = useSegments();
-  const router = useRouter();
 
   /**
    * THE SPLASH COMES DOWN NO MATTER WHAT, and this is the whole fix.
@@ -101,22 +98,39 @@ function RootNavigator() {
     void SplashScreen.hideAsync();
   }, []);
 
-  useEffect(() => {
-    if (!isLoaded) {
-      return;
-    }
+  /* ── THERE IS NO REACTIVE REDIRECT HERE, AND THAT IS DELIBERATE ───────────
+     There was one, and it was the reason signing out did not sign you out.
 
-    void SplashScreen.hideAsync();
+     It read:
 
-    const inAuthGroup = segments[0] === '(auth)';
+         if (!isSignedIn && !inAuthGroup)      router.replace('/(auth)/sign-in');
+         else if (isSignedIn && inAuthGroup)   router.replace('/');
 
-    if (!isSignedIn && !inAuthGroup) {
-      router.replace('/(auth)/sign-in');
-    } else if (isSignedIn && inAuthGroup) {
-      router.replace('/');
-    }
-  }, [isLoaded, isSignedIn, segments, router]);
+     `@clerk/expo` Core 3 is signal-based, and this component reads `useAuth()`
+     once and does not re-render when the signals settle. So `isSignedIn` sits
+     at whatever it was — and after a sign-out it sits at TRUE. The sign-out
+     handler cleared the session and navigated to the auth group, `inAuthGroup`
+     became true, the second branch fired on that stale TRUE, and it replaced
+     the route straight back to `/`. The user was returned to the app they had
+     just left, with a dead session, which is exactly what was reported:
+     "I'm signing out but I don't actually get signed out."
 
+     Verified on the device: the session WAS cleared -- the match list answered
+     UNAUTHENTICATED -- while the screen stayed in the app. So the redirect was
+     not failing to fire. It was fighting the navigation and winning.
+
+     Routing is now done by whoever knows something actually happened, never by
+     a component guessing from a signal it cannot trust:
+
+       - sign-in       `router.replace('/')` after `finalize()` succeeds
+       - sign-out      `router.replace('/(auth)/sign-in')` after `signOut()`
+       - session dead  `(app)/_layout.tsx` routes out when the API says 401,
+                       which is the ground truth and covers expiry, where
+                       nobody pressed anything
+
+     A cold start needs no redirect: the default route is the `(app)` group, a
+     valid session simply works, and an invalid one gets a 401 and is sent to
+     sign-in by the guard. */
   return (
     <Stack
       screenOptions={{
