@@ -24,9 +24,35 @@ import { surface } from '../src/theme/tokens';
 import { Screen } from '../src/ui/Layout';
 import { ErrorState, LoadingState } from '../src/ui/State';
 
-// Held until Clerk has restored the session, so the first frame the user sees
-// is the screen they belong on rather than the sign-in screen flashing past.
-void SplashScreen.preventAutoHideAsync();
+/**
+ * THE NATIVE SPLASH IS NOT HELD, AND THAT IS THE FIX.
+ *
+ * WHAT HOLDING IT COST, MEASURED ON A REAL DEVICE.
+ * `preventAutoHideAsync()` used to run here, and the app shipped a build that
+ * showed the logo forever. The process was alive, the bundle loaded, Clerk
+ * resolved, the router mounted, and a `uiautomator` dump read back the Matches
+ * screen and all five tabs -- none of which a single pixel showed, because the
+ * splash window was still on top eating every touch. No crash, no error, no
+ * log line. A client would have concluded the product was dead.
+ *
+ * THE MECHANISM, from expo-splash-screen's own Android source.
+ * `SplashScreenManager.registerOnActivity` installs an `OnPreDrawListener`
+ * that returns FALSE -- cancelling the draw -- while `keepSplashScreenOnScreen`
+ * is true. `hide()` only flips that boolean; the listener removes itself and
+ * lets the frame through on a SUBSEQUENT pre-draw pass. On a screen that has
+ * finished rendering and is not animating, nothing requests another pass. The
+ * flag is false, the app is ready, and the frame is never drawn.
+ *
+ * So this is not a hold to time out or retry around. Its release depends on a
+ * draw that may never be scheduled, which is why the timeout added alongside
+ * this would not have saved it either.
+ *
+ * WHAT WE GIVE UP, AND WHY IT IS NOTHING. Holding it bought one thing: no
+ * flash of the sign-in screen before a restored session resolves. The root now
+ * renders its own dark `LoadingState` while `isLoaded` is false, so the first
+ * React frame is already the right screen -- the same result, in our own code,
+ * where a failure is visible and recoverable.
+ */
 
 /**
  * How long the splash may hide the app while Clerk starts up.
@@ -75,13 +101,20 @@ function RootNavigator() {
    * will show the user something. Tying the two together is what turned a
    * recoverable network failure into a permanently blank product.
    */
+  // Released on mount, unconditionally, before anything can decide otherwise.
+  // Nothing holds it any more, so this is belt and braces rather than the
+  // mechanism -- but it costs one call and it is the line that guarantees no
+  // future edit can make the splash outlive the first frame again.
+  useEffect(() => {
+    void SplashScreen.hideAsync();
+  }, []);
+
   useEffect(() => {
     if (isLoaded) {
       return;
     }
     const timer = setTimeout(() => {
       setStartupTimedOut(true);
-      void SplashScreen.hideAsync();
     }, CLERK_STARTUP_BUDGET_MS);
     return () => { clearTimeout(timer); };
   }, [isLoaded, attempt]);
