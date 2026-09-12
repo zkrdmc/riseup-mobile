@@ -70,6 +70,63 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * How long to wait for Clerk to mint a token before giving up on it.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ *  THE BUG THIS EXISTS TO FIX
+ * ══════════════════════════════════════════════════════════════════════════
+ * `getToken()` used to be awaited BEFORE the AbortController and its timer
+ * were created. So a token mint that never settled hung the whole request
+ * forever: no timeout, because the timer did not exist yet; no error, because
+ * nothing rejected; and no recovery, because react-query cannot retry a query
+ * that has not finished. Observed on a device as `status=pending
+ * fetchStatus=fetching error=none`, permanently, on every screen at once --
+ * a spinner on the match list and em-dashes in Settings, with the API
+ * perfectly healthy and reachable.
+ *
+ * That is the worst shape a failure can take: indistinguishable from slow,
+ * and it never resolves into anything a person can act on.
+ *
+ * Shorter than the request budget on purpose. Minting a token is either a
+ * cache read or one round trip to Clerk; if it has not happened in eight
+ * seconds it is not going to, and the remaining budget is better spent
+ * failing honestly than waiting.
+ */
+const TOKEN_TIMEOUT_MS = 8_000;
+
+/**
+ * `getToken()`, bounded.
+ *
+ * Resolves null rather than throwing when the budget runs out. A request with
+ * no Authorization header gets a 401, which is a REAL answer the caller can
+ * render and retry -- strictly better than hanging, and it keeps the one case
+ * where an unauthenticated call is legitimate (a public route) working.
+ */
+async function tokenWithin(
+  getToken: () => Promise<string | null>,
+  budgetMs: number,
+): Promise<string | null> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      getToken(),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => { resolve(null); }, budgetMs);
+      }),
+    ]);
+  } catch {
+    // Clerk throws `ClerkOfflineError` with no network. Null, not a throw:
+    // the request below turns it into a 401 or an OfflineError, and both of
+    // those are already handled and already say something true.
+    return null;
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export class ApiClient {
   private readonly baseUrl: string;
   private readonly getToken: () => Promise<string | null>;
@@ -102,7 +159,9 @@ export class ApiClient {
       Accept: 'application/json',
     };
 
-    const token = await this.getToken();
+    // BOUNDED. See `tokenWithin`: awaiting this unbounded, before the abort
+    // timer below exists, is what hung every request in the app at once.
+    const token = await tokenWithin(this.getToken, TOKEN_TIMEOUT_MS);
     if (token !== null) {
       headers.Authorization = `Bearer ${token}`;
     }
@@ -217,7 +276,9 @@ export class ApiClient {
       Accept: 'application/json',
       'Idempotency-Key': idempotencyKey ?? Crypto.randomUUID(),
     };
-    const token = await this.getToken();
+    // Same bound as the read path. An upload that hangs on the token never
+    // reaches the progress reporting, so it looks like a stalled transfer.
+    const token = await tokenWithin(this.getToken, TOKEN_TIMEOUT_MS);
     if (token !== null) {
       headers.Authorization = `Bearer ${token}`;
     }
