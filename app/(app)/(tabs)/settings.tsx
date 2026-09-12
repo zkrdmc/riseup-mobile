@@ -90,6 +90,13 @@ export default function SettingsScreen() {
             await clearFixtureReminders();
             pushState.clear();
             await signOut();
+            /* NAVIGATED, NOT HOPED FOR. This used to end at `signOut()` and
+               leave the routing to the reactive redirect in
+               `app/_layout.tsx`, which is gated on a Clerk signal the root
+               reads once -- so it never fired and sign-out appeared to do
+               nothing at all. The screen that performed the action is the one
+               that knows it happened. */
+            router.replace('/(auth)/sign-in');
           })();
         },
       },
@@ -138,13 +145,13 @@ export default function SettingsScreen() {
                 inbox.clear();
                 await clearFixtureReminders();
                 pushState.clear();
-            // Pending fixture reminders too. Left behind, a previous club's
-            // schedule fires at whoever holds this shared handset next --
-            // confusing, and a small leak of that club's fixtures.
-            await clearFixtureReminders();
                 cameraStore.reset();
                 surveyDraft.reset();
                 await signOut();
+                // Same reason as the sign-out handler: the reactive redirect
+                // cannot be relied on, and an account that no longer exists
+                // must not be left looking at the app shell.
+                router.replace('/(auth)/sign-in');
               } catch {
                 setDeleting(false);
                 Alert.alert(

@@ -22,10 +22,10 @@
  */
 
 import { useAuth } from '@clerk/expo';
-import { Stack } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 
-import { isNoClubError } from '../../src/api/errors';
+import { isAuthError, isNoClubError } from '../../src/api/errors';
 import { useApi } from '../../src/api/provider';
 import { useMe } from '../../src/api/queries';
 import { syncFixtureReminders } from '../../src/notifications/fixtureReminders';
@@ -53,6 +53,35 @@ export default function AppLayout() {
 function SignedInLayout() {
   const me = useMe();
   const api = useApi();
+  const router = useRouter();
+
+  /* ── THE SERVER'S 401 IS THE GROUND TRUTH ABOUT BEING SIGNED IN ───────────
+     Two bugs shared one cause, and this is it.
+
+     Signing out appeared to do nothing: the handler cleared the session and
+     then waited for the reactive redirect in `app/_layout.tsx`, which is gated
+     on Clerk's `isLoaded` as read by THAT component -- the same signal that
+     froze the startup overlay, because `@clerk/expo` Core 3 is signal-based
+     and the root reads it once and does not re-render. With no redirect, the
+     user stayed in the app shell. And every query then 401'd, which is why the
+     match list sat on a spinner: the session was gone, nothing said so, and
+     the app kept asking.
+
+     So the decision is taken from the API's answer instead of the client's
+     opinion. A 401 means the server does not accept this session, whatever
+     Clerk's signals currently claim, and that is the one fact both bugs
+     needed.
+
+     `isNoClubError` is checked BEFORE this below, and must stay that way: a
+     legitimate member with no active organisation also gets a 403, and
+     bouncing them to sign-in would be a loop they cannot escape by signing in
+     again. */
+  const signedOutByServer = isAuthError(me.error) && !isNoClubError(me.error);
+  useEffect(() => {
+    if (signedOutByServer) {
+      router.replace('/(auth)/sign-in');
+    }
+  }, [signedOutByServer, router]);
 
   /* Fixture reminders are scheduled HERE rather than on the Inbox screen,
      because this layout mounts whenever somebody is in the app and the Inbox
