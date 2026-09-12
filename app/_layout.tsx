@@ -12,7 +12,7 @@ import { ClerkProvider, useAuth } from '@clerk/expo';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -21,15 +21,70 @@ import { I18nProvider } from '../src/i18n/store';
 import { tokenCache } from '../src/auth/tokenCache';
 import { config } from '../src/lib/config';
 import { surface } from '../src/theme/tokens';
+import { Screen } from '../src/ui/Layout';
+import { ErrorState, LoadingState } from '../src/ui/State';
 
 // Held until Clerk has restored the session, so the first frame the user sees
 // is the screen they belong on rather than the sign-in screen flashing past.
 void SplashScreen.preventAutoHideAsync();
 
+/**
+ * How long the splash may hide the app while Clerk starts up.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ *  THE BUG THIS EXISTS TO FIX
+ * ══════════════════════════════════════════════════════════════════════════
+ * `hideAsync` used to be called ONLY from inside the effect guarded by Clerk's
+ * `isLoaded`. So "Clerk never finishes loading" and "the app never starts"
+ * were the same event: the logo stayed on screen, forever, with no message, no
+ * retry and nothing in the logs. Observed on a real device — the process alive,
+ * the JS bundle loaded, React resumed, and not one text node rendered.
+ *
+ * Any of these produces it: no signal at a ground, a captive portal on club
+ * Wi-Fi, Clerk's frontend API unreachable, or a token cache holding a session
+ * minted by a DIFFERENT Clerk instance — which is what a build switched from
+ * the development key to the live one inherits, because the install is an
+ * update and SecureStore survives it.
+ *
+ * Ten seconds: long enough that a slow-but-working start never flashes this,
+ * short enough that nobody standing on a touchline concludes the app is dead.
+ * Clerk normally settles in under two.
+ */
+const CLERK_STARTUP_BUDGET_MS = 10_000;
+
 function RootNavigator() {
   const { isLoaded, isSignedIn } = useAuth();
+  /**
+   * Has the startup budget run out with Clerk still not ready?
+   *
+   * Kept separate from `isLoaded` rather than folded into it, because they
+   * mean different things and the screen has to say which: not-loaded-yet is a
+   * spinner, and not-loaded-after-ten-seconds is a failure with a retry.
+   */
+  const [startupTimedOut, setStartupTimedOut] = useState(false);
+  /** Bumped by the retry, to re-arm the budget for another attempt. */
+  const [attempt, setAttempt] = useState(0);
   const segments = useSegments();
   const router = useRouter();
+
+  /**
+   * THE SPLASH COMES DOWN NO MATTER WHAT, and this is the whole fix.
+   *
+   * It is deliberately in its own effect with no dependency on `isLoaded`.
+   * Hiding the splash is not an auth decision — it is the promise that the app
+   * will show the user something. Tying the two together is what turned a
+   * recoverable network failure into a permanently blank product.
+   */
+  useEffect(() => {
+    if (isLoaded) {
+      return;
+    }
+    const timer = setTimeout(() => {
+      setStartupTimedOut(true);
+      void SplashScreen.hideAsync();
+    }, CLERK_STARTUP_BUDGET_MS);
+    return () => { clearTimeout(timer); };
+  }, [isLoaded, attempt]);
 
   useEffect(() => {
     if (!isLoaded) {
@@ -46,6 +101,43 @@ function RootNavigator() {
       router.replace('/');
     }
   }, [isLoaded, isSignedIn, segments, router]);
+
+  /* ── EVERY STARTUP STATE RENDERS SOMETHING ────────────────────────────────
+     Three of them, and the reason they are spelled out rather than collapsed
+     is that the old code had only one path and the other two fell through to
+     nothing at all.
+
+     Still starting: a spinner. Invisible behind the splash on a cold start,
+     and the visible state during a retry after the splash has come down.
+
+     Gave up: the failure, in words, with a retry that re-arms the budget.
+
+     Loaded: the app. */
+  if (!isLoaded) {
+    if (!startupTimedOut) {
+      return (
+        <Screen edges={['top', 'bottom']}>
+          <LoadingState label="Starting RiseUp" />
+        </Screen>
+      );
+    }
+    return (
+      <Screen edges={['top', 'bottom']}>
+        <ErrorState
+          message={
+            'RiseUp could not reach the sign-in service. This is almost always the '
+            + 'connection — check signal or Wi-Fi and try again. Nothing on this '
+            + 'phone has been lost.'
+          }
+          code="auth_unreachable"
+          onRetry={() => {
+            setStartupTimedOut(false);
+            setAttempt((n) => n + 1);
+          }}
+        />
+      </Screen>
+    );
+  }
 
   return (
     <Stack
