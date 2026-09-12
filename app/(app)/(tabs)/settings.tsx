@@ -35,6 +35,7 @@ import { links, openLink } from '../../../src/lib/links';
 import { useI18n } from '../../../src/i18n/store';
 import { LANGUAGES, isRtlLocale, type Locale } from '../../../src/i18n/i18n';
 import { inbox } from '../../../src/notifications/inbox';
+import { pushState } from '../../../src/notifications/push';
 import { clearFixtureReminders } from '../../../src/notifications/fixtureReminders';
 import {
   ink,
@@ -87,6 +88,7 @@ export default function SettingsScreen() {
             // schedule fires at whoever holds this shared handset next --
             // confusing, and a small leak of that club's fixtures.
             await clearFixtureReminders();
+            pushState.clear();
             await signOut();
           })();
         },
@@ -135,6 +137,7 @@ export default function SettingsScreen() {
                 await api.clearCache();
                 inbox.clear();
                 await clearFixtureReminders();
+                pushState.clear();
             // Pending fixture reminders too. Left behind, a previous club's
             // schedule fires at whoever holds this shared handset next --
             // confusing, and a small leak of that club's fixtures.

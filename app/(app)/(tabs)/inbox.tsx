@@ -16,11 +16,10 @@ import { Pressable, StyleSheet, View } from 'react-native';
 
 import { useApi } from '../../../src/api/provider';
 import { inbox } from '../../../src/notifications/inbox';
-import { clearBadge, listen, registerForPush, type PushState } from '../../../src/notifications/push';
+import { clearBadge, listen, pushState, type PushState } from '../../../src/notifications/push';
 import { consumeLaunchNotification } from '../../../src/notifications/push';
 import { routeFor, type InboxItem } from '../../../src/notifications/types';
 import { when } from '../../../src/lib/format';
-import { useState } from 'react';
 import { line, minTouchTarget, signal, space, surface } from '../../../src/theme/tokens';
 import { Row, Screen, Spacer } from '../../../src/ui/Layout';
 import { EmptyState } from '../../../src/ui/State';
@@ -30,12 +29,14 @@ export default function InboxScreen() {
   const api = useApi();
   const router = useRouter();
   const items = useSyncExternalStore(inbox.subscribe, inbox.getSnapshot);
-  const [push, setPush] = useState<PushState | null>(null);
+  /* Read, not owned. `(app)/_layout.tsx` does the registering on every
+     launch; this screen only reports what happened. */
+  const push: PushState | null = useSyncExternalStore(
+    pushState.subscribe, pushState.getSnapshot);
 
   useEffect(() => {
     void inbox.hydrate();
     void clearBadge();
-    void registerForPush(api).then(setPush);
 
     const open = (item: InboxItem) => {
       const route = routeFor(item.category, item.data);

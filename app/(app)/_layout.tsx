@@ -29,6 +29,7 @@ import { isNoClubError } from '../../src/api/errors';
 import { useApi } from '../../src/api/provider';
 import { useMe } from '../../src/api/queries';
 import { syncFixtureReminders } from '../../src/notifications/fixtureReminders';
+import { registerForPush } from '../../src/notifications/push';
 import { useOrganisation } from '../../src/auth/organisation';
 import { inbox } from '../../src/notifications/inbox';
 import { ink, surface } from '../../src/theme/tokens';
@@ -64,6 +65,13 @@ function SignedInLayout() {
      nothing, so a club with no fixtures, no permission or no network simply
      gets no reminders rather than a broken launch. */
   useEffect(() => {
+    /* PUSH REGISTRATION BELONGS HERE, NOT ON THE INBOX SCREEN. Settings tells
+       the user "this device registers for notifications on every launch", and
+       while this lived on the Inbox tab that was untrue: a coach who never
+       opened Inbox never registered, so the server never learned their address
+       and nothing could be delivered to them. The outcome is published to
+       `pushState` for the Inbox to display. */
+    void registerForPush(api);
     void syncFixtureReminders(api);
   }, [api]);
   const { signOut } = useAuth();

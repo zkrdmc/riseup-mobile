@@ -55,7 +55,71 @@ Notifications.setNotificationHandler({
   }),
 });
 
+/**
+ * The last registration outcome, readable from anywhere.
+ *
+ * ══════════════════════════════════════════════════════════════════════════
+ *  WHY THIS EXISTS
+ * ══════════════════════════════════════════════════════════════════════════
+ * `registerForPush` used to be called from the INBOX SCREEN, which meant the
+ * claim in Settings -- "this device registers for notifications on every
+ * launch" -- was simply untrue. A coach who never opens the Inbox tab never
+ * registered, so the server never learned their address and nothing was ever
+ * delivered to them. The one screen guaranteed to be visited by somebody
+ * waiting for a notification is the last place the registration should depend
+ * on.
+ *
+ * It now runs from `(app)/_layout.tsx`, which mounts whenever anybody is in
+ * the app. That moved the CALL away from the screen that wanted to DISPLAY the
+ * result, hence this store: the layout registers, the Inbox reads.
+ *
+ * Deliberately not react-query. There is no server state to cache here -- the
+ * outcome is a fact about this device and this launch, and it is written once
+ * per launch by exactly one caller.
+ */
+type PushStateListener = () => void;
+
+class PushStateStore {
+  private state: PushState | null = null;
+  private listeners = new Set<PushStateListener>();
+
+  subscribe = (listener: PushStateListener): (() => void) => {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  };
+
+  getSnapshot = (): PushState | null => this.state;
+
+  set = (next: PushState): void => {
+    this.state = next;
+    this.listeners.forEach((listener) => {
+      listener();
+    });
+  };
+
+  /** Sign-out: the next person on a shared handset has their own answer. */
+  clear = (): void => {
+    this.state = null;
+    this.listeners.forEach((listener) => {
+      listener();
+    });
+  };
+}
+
+export const pushState = new PushStateStore();
+
 export async function registerForPush(api: ApiClient): Promise<PushState> {
+  // Published on every path, including the unsupported and denied ones, so the
+  // Inbox can explain WHY nothing will arrive rather than showing an empty
+  // list that looks like "no news".
+  const result = await resolvePushState(api);
+  pushState.set(result);
+  return result;
+}
+
+async function resolvePushState(api: ApiClient): Promise<PushState> {
   // A simulator has no push token. Returning a clear reason keeps this out of
   // the "permissions denied" bucket, which is what a developer would otherwise
   // spend twenty minutes checking.
