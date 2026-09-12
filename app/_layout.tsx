@@ -13,6 +13,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
+import { StyleSheet, View } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -21,7 +22,6 @@ import { I18nProvider } from '../src/i18n/store';
 import { tokenCache } from '../src/auth/tokenCache';
 import { config } from '../src/lib/config';
 import { surface } from '../src/theme/tokens';
-import { Screen } from '../src/ui/Layout';
 import { ErrorState, LoadingState } from '../src/ui/State';
 
 /**
@@ -135,44 +135,17 @@ function RootNavigator() {
     }
   }, [isLoaded, isSignedIn, segments, router]);
 
-  /* ── EVERY STARTUP STATE RENDERS SOMETHING ────────────────────────────────
-     Three of them, and the reason they are spelled out rather than collapsed
-     is that the old code had only one path and the other two fell through to
-     nothing at all.
+  /* THE NAVIGATOR IS ALWAYS MOUNTED, AND THE STARTUP UI GOES OVER IT.
+     The previous version returned the loading and error screens INSTEAD of
+     <Stack>. That is the thing to avoid in an expo-router root layout: the
+     root must mount a navigator on every render, and a root that sometimes
+     renders a plain View leaves the router with no navigator at all -- which
+     is a different failure from the one it was trying to report, and a harder
+     one to see.
 
-     Still starting: a spinner. Invisible behind the splash on a cold start,
-     and the visible state during a retry after the splash has come down.
-
-     Gave up: the failure, in words, with a retry that re-arms the budget.
-
-     Loaded: the app. */
-  if (!isLoaded) {
-    if (!startupTimedOut) {
-      return (
-        <Screen edges={['top', 'bottom']}>
-          <LoadingState label="Starting RiseUp" />
-        </Screen>
-      );
-    }
-    return (
-      <Screen edges={['top', 'bottom']}>
-        <ErrorState
-          message={
-            'RiseUp could not reach the sign-in service. This is almost always the '
-            + 'connection — check signal or Wi-Fi and try again. Nothing on this '
-            + 'phone has been lost.'
-          }
-          code="auth_unreachable"
-          onRetry={() => {
-            setStartupTimedOut(false);
-            setAttempt((n) => n + 1);
-          }}
-        />
-      </Screen>
-    );
-  }
-
-  return (
+     So the states are an overlay. The navigator stays mounted underneath from
+     the first frame, and the overlay covers it until Clerk has settled. */
+  const stack = (
     <Stack
       screenOptions={{
         headerShown: false,
@@ -185,7 +158,52 @@ function RootNavigator() {
       <Stack.Screen name="(app)" />
     </Stack>
   );
+
+  return (
+    <View style={styles.root}>
+      {stack}
+      {isLoaded ? null : (
+        <View style={styles.startupOverlay}>
+          {startupTimedOut ? (
+            <ErrorState
+              message={
+                'RiseUp could not reach the sign-in service. This is almost always the '
+                + 'connection \u2014 check signal or Wi-Fi and try again. Nothing on this '
+                + 'phone has been lost.'
+              }
+              code="auth_unreachable"
+              onRetry={() => {
+                setStartupTimedOut(false);
+                setAttempt((n) => n + 1);
+              }}
+            />
+          ) : (
+            <LoadingState label="Starting RiseUp" />
+          )}
+        </View>
+      )}
+    </View>
+  );
 }
+
+const styles = StyleSheet.create({
+  root: {
+    flex: 1,
+    backgroundColor: surface.bg0,
+  },
+  startupOverlay: {
+    // Covers the navigator rather than replacing it. Opaque, so a half-built
+    // screen underneath is never visible through it.
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: surface.bg0,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});
 
 export default function RootLayout() {
   return (
