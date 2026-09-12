@@ -26,6 +26,10 @@ export const paths = {
 
   /* ── Matches ── */
   matches: `${V1}/matches`,
+  /* The club's own document: roster, kits, and the FIXTURES the fixture
+     reminders are scheduled from. Read-only from the app -- the dashboard
+     owns editing it. */
+  teamIndex: `${V1}/team-index`,
   match: (matchId: string) => `${V1}/matches/${matchId}`,
   matchPlayers: (matchId: string) => `${V1}/matches/${matchId}/players`,
   matchPlayer: (matchId: string, trackId: number) =>

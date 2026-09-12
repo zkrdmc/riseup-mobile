@@ -23,11 +23,12 @@
 
 import { useAuth } from '@clerk/expo';
 import { Stack } from 'expo-router';
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 
 import { isNoClubError } from '../../src/api/errors';
 import { useApi } from '../../src/api/provider';
 import { useMe } from '../../src/api/queries';
+import { syncFixtureReminders } from '../../src/notifications/fixtureReminders';
 import { useOrganisation } from '../../src/auth/organisation';
 import { inbox } from '../../src/notifications/inbox';
 import { ink, surface } from '../../src/theme/tokens';
@@ -51,6 +52,20 @@ export default function AppLayout() {
 function SignedInLayout() {
   const me = useMe();
   const api = useApi();
+
+  /* Fixture reminders are scheduled HERE rather than on the Inbox screen,
+     because this layout mounts whenever somebody is in the app and the Inbox
+     tab may never be opened. A reminder that only gets scheduled if you
+     happen to visit a particular tab is not a reminder anybody can rely on.
+
+     Once per entry, and that is enough: the plan's horizon is a fortnight, so
+     the window rolls forward on any launch inside two weeks. Best-effort by
+     construction — `syncFixtureReminders` resolves a result and throws
+     nothing, so a club with no fixtures, no permission or no network simply
+     gets no reminders rather than a broken launch. */
+  useEffect(() => {
+    void syncFixtureReminders(api);
+  }, [api]);
   const { signOut } = useAuth();
   const { state: org, activate } = useOrganisation();
 

@@ -35,6 +35,7 @@ import { links, openLink } from '../../../src/lib/links';
 import { useI18n } from '../../../src/i18n/store';
 import { LANGUAGES, isRtlLocale, type Locale } from '../../../src/i18n/i18n';
 import { inbox } from '../../../src/notifications/inbox';
+import { clearFixtureReminders } from '../../../src/notifications/fixtureReminders';
 import {
   ink,
   line,
@@ -82,6 +83,10 @@ export default function SettingsScreen() {
             // the previous club's match names.
             await api.clearCache();
             inbox.clear();
+            // Pending fixture reminders too. Left behind, a previous club's
+            // schedule fires at whoever holds this shared handset next --
+            // confusing, and a small leak of that club's fixtures.
+            await clearFixtureReminders();
             await signOut();
           })();
         },
@@ -129,6 +134,11 @@ export default function SettingsScreen() {
                 await user?.delete();
                 await api.clearCache();
                 inbox.clear();
+                await clearFixtureReminders();
+            // Pending fixture reminders too. Left behind, a previous club's
+            // schedule fires at whoever holds this shared handset next --
+            // confusing, and a small leak of that club's fixtures.
+            await clearFixtureReminders();
                 cameraStore.reset();
                 surveyDraft.reset();
                 await signOut();

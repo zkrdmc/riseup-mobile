@@ -1179,6 +1179,96 @@ console.log('24. Footage that starts with the match already under way');
         both.message.slice(-58));
 }
 
+console.log('');
+console.log('25. Fixture reminders, scheduled on the phone rather than pushed');
+{
+  const sched = require('../../../../.smoke/notifications/fixtureSchedule');
+  const NOW = new Date(2026, 8, 10, 12, 0, 0);   // Thu 10 Sep 2026, 12:00 local
+
+  const fx = (o) => Object.assign({
+    id: 'fx1', date: '2026-09-12', kickoffTime: '15:00',
+    opponent: 'Raja', home: true,
+  }, o);
+
+  // ── The ordinary case ──
+  const one = sched.planReminders([fx({})], NOW);
+  check('a fixture inside the horizon is planned', one.length === 1);
+  check('and it fires 90 minutes before kick-off',
+        one[0].fireAt.getHours() === 13 && one[0].fireAt.getMinutes() === 30,
+        one[0] && one[0].fireAt.toString().slice(0, 24));
+  check('the title names the opponent and side', one[0].title === 'Raja (H)',
+        one[0].title);
+  check('the body says the kick-off time, not the reminder time',
+        one[0].body.includes('15:00'), one[0].body);
+  check('it carries the category the app routes on',
+        one[0].data.category === 'fixture_reminder');
+
+  // ── WHAT IT REFUSES TO GUESS ──
+  // `core/access_windows.py` grants a fixture no window without a kickoff
+  // time, for the same reason: a reminder at the wrong hour teaches somebody
+  // to ignore the next one.
+  check('a fixture with no kick-off time is skipped, not guessed',
+        sched.planReminders([fx({ kickoffTime: undefined })], NOW).length === 0);
+  check('a fixture with no date is skipped',
+        sched.planReminders([fx({ date: undefined })], NOW).length === 0);
+  check('a half-typed date is skipped rather than becoming Invalid Date',
+        sched.planReminders([fx({ date: '2026-9' })], NOW).length === 0);
+  check('an impossible time is skipped',
+        sched.planReminders([fx({ kickoffTime: '25:00' })], NOW).length === 0);
+
+  // ── Time boundaries ──
+  check('a fixture beyond the horizon is not scheduled yet',
+        sched.planReminders([fx({ date: '2026-10-30' })], NOW).length === 0);
+  check('a fixture already kicked off is dropped, never fired late',
+        sched.planReminders([fx({ date: '2026-09-10', kickoffTime: '09:00' })],
+                            NOW).length === 0);
+  // Inside the lead window: kick-off is still ahead, but the reminder moment
+  // has passed. Firing "in 90 minutes" after that is wrong, so it is dropped.
+  check('a kick-off nearer than the lead time is dropped',
+        sched.planReminders([fx({ date: '2026-09-10', kickoffTime: '13:00' })],
+                            NOW).length === 0);
+
+  // ── The OS cap ──
+  // iOS allows 64 pending local notifications. A season's worth would exceed
+  // it and the OS would choose which to drop; the plan keeps the SOONEST.
+  const many = [];
+  for (let d = 11; d <= 24; d += 1) {
+    many.push(fx({ id: `f${d}`, date: `2026-09-${d}` }));
+  }
+  const capped = sched.planReminders(many, NOW, { max: 3 });
+  check('the cap keeps the soonest, not an arbitrary subset',
+        capped.length === 3 && capped[0].fireAt < capped[1].fireAt
+        && capped[1].fireAt < capped[2].fireAt);
+  check('and the first is the nearest fixture',
+        capped[0].data.fixtureId === 'f11', capped[0].data.fixtureId);
+
+  // ── Rescheduling is a diff ──
+  const planned = sched.planReminders([fx({})], NOW);
+  const same = sched.reconcile(planned,
+                               [{ key: planned[0].key, fireAt: planned[0].fireAt }]);
+  check('an unchanged fixture is left alone',
+        same.add.length === 0 && same.cancel.length === 0);
+
+  const moved = sched.reconcile(
+    planned,
+    [{ key: planned[0].key, fireAt: new Date(2026, 8, 12, 12, 0, 0) }]);
+  check('a moved kick-off is cancelled and re-added',
+        moved.cancel.length === 1 && moved.add.length === 1);
+
+  const removed = sched.reconcile([], [{ key: 'fixture:gone', fireAt: NOW }]);
+  check('a cancelled fixture has its reminder cancelled',
+        removed.cancel.length === 1 && removed.add.length === 0);
+
+  const fresh = sched.reconcile(planned, []);
+  check('nothing pending means everything is added', fresh.add.length === 1);
+
+  // An opponent nobody has named yet still gets a reminder -- the club knows
+  // when it is playing, which is the part that matters.
+  const tbc = sched.planReminders([fx({ opponent: undefined })], NOW);
+  check('an unnamed opponent still schedules', tbc.length === 1
+        && tbc[0].title === 'Kick-off soon', tbc[0] && tbc[0].title);
+}
+
 console.log(`\n${'='.repeat(60)}`);
 console.log(`  ${pass} passed, ${fail} failed`);
 console.log('='.repeat(60));

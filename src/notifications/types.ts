@@ -19,7 +19,17 @@ export type NotificationCategory =
   | 'lineup_needed'
   | 'upload_complete'
   | 'upload_stalled'
-  | 'quota_warning';
+  | 'quota_warning'
+  /**
+   * A fixture is about to kick off.
+   *
+   * THE ONLY CATEGORY THAT IS NOT SENT BY THE SERVER. A fixture's kickoff is a
+   * time the club wrote down in advance, so the phone already knows it and
+   * schedules the reminder itself -- see `fixtures.ts`. That means it arrives
+   * with no signal, no push credential and no server clock, which matters for
+   * the one notification most likely to be needed at a ground.
+   */
+  | 'fixture_reminder';
 
 export interface CategorySpec {
   category: NotificationCategory;
@@ -81,6 +91,13 @@ export const CATEGORIES: readonly CategorySpec[] = [
     canDisable: true,
   },
   {
+    category: 'fixture_reminder',
+    title: 'Fixture reminder',
+    description: 'A match is kicking off soon and needs filming.',
+    priority: 'high',
+    canDisable: true,
+  },
+  {
     category: 'quota_warning',
     title: 'Quota warning',
     description: 'Your club is close to its processing limit.',
@@ -120,6 +137,12 @@ export function routeFor(
     case 'upload_complete':
     case 'upload_stalled':
       return { pathname: '/uploads' };
+
+    case 'fixture_reminder':
+      // Capture, not the match list. The action a reminder implies is "set the
+      // phone up and film", and §6 asks that a notification resolve to the
+      // thing it is asking for rather than to somewhere nearby.
+      return { pathname: '/capture' };
 
     case 'quota_warning':
       return { pathname: '/settings' };
