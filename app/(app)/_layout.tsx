@@ -39,10 +39,43 @@ import { LoadingState } from '../../src/ui/State';
 
 export default function AppLayout() {
   const { isLoaded, isSignedIn } = useAuth();
+  const router = useRouter();
 
-  // Nothing below here may run without a session. The root layout is
-  // redirecting to sign-in; rendering the bare stack in the meantime avoids
-  // both the Clerk warning and a flash of the loading state.
+  /* ── THE SERVER'S 401 IS THE GROUND TRUTH, AND IT IS CHECKED IN BOTH
+     BRANCHES ────────────────────────────────────────────────────────────────
+     This guard lived in `SignedInLayout` and therefore never ran for the one
+     person who needed it. The branch below returns `<AppStack />` whenever
+     Clerk does not report a session, so a signed-out user never mounted
+     `SignedInLayout` at all -- they sat in the app shell with every query
+     401ing, which is what "signing out does nothing" and "the match list is
+     stuck reloading" both looked like from the outside.
+
+     The comment that used to be here said "the root layout is redirecting to
+     sign-in". It is not: that redirect is gated on Clerk's `isLoaded` as read
+     by a component that reads it once and never re-renders, because
+     `@clerk/expo` Core 3 is signal-based. Relying on it is what produced both
+     bugs.
+
+     So the decision is taken from the API's answer, which is available in
+     either branch: `useMe` is a shared cached query, so asking for it here
+     costs nothing extra, and when there is no usable session it answers 401 --
+     the one fact that is true regardless of what the client's signals say.
+
+     `isNoClubError` is excluded deliberately. A legitimate member with no
+     active organisation also gets a 403, and bouncing them to sign-in would be
+     a loop they cannot escape by signing in again; the no-club screen below is
+     the right destination for them. */
+  const me = useMe();
+  const rejectedByServer = isAuthError(me.error) && !isNoClubError(me.error);
+  useEffect(() => {
+    if (rejectedByServer) {
+      router.replace('/(auth)/sign-in');
+    }
+  }, [rejectedByServer, router]);
+
+  // Nothing below here may run without a session. Rendering the bare stack
+  // while Clerk is still settling avoids both the Clerk warning and a flash of
+  // the loading state; the guard above is what gets somebody OUT of it.
   if (!isLoaded || !isSignedIn) {
     return <AppStack />;
   }
@@ -53,35 +86,7 @@ export default function AppLayout() {
 function SignedInLayout() {
   const me = useMe();
   const api = useApi();
-  const router = useRouter();
 
-  /* ── THE SERVER'S 401 IS THE GROUND TRUTH ABOUT BEING SIGNED IN ───────────
-     Two bugs shared one cause, and this is it.
-
-     Signing out appeared to do nothing: the handler cleared the session and
-     then waited for the reactive redirect in `app/_layout.tsx`, which is gated
-     on Clerk's `isLoaded` as read by THAT component -- the same signal that
-     froze the startup overlay, because `@clerk/expo` Core 3 is signal-based
-     and the root reads it once and does not re-render. With no redirect, the
-     user stayed in the app shell. And every query then 401'd, which is why the
-     match list sat on a spinner: the session was gone, nothing said so, and
-     the app kept asking.
-
-     So the decision is taken from the API's answer instead of the client's
-     opinion. A 401 means the server does not accept this session, whatever
-     Clerk's signals currently claim, and that is the one fact both bugs
-     needed.
-
-     `isNoClubError` is checked BEFORE this below, and must stay that way: a
-     legitimate member with no active organisation also gets a 403, and
-     bouncing them to sign-in would be a loop they cannot escape by signing in
-     again. */
-  const signedOutByServer = isAuthError(me.error) && !isNoClubError(me.error);
-  useEffect(() => {
-    if (signedOutByServer) {
-      router.replace('/(auth)/sign-in');
-    }
-  }, [signedOutByServer, router]);
 
   /* Fixture reminders are scheduled HERE rather than on the Inbox screen,
      because this layout mounts whenever somebody is in the app and the Inbox
