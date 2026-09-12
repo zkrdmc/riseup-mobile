@@ -12,8 +12,7 @@ import { ClerkProvider, useAuth } from '@clerk/expo';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { useEffect } from 'react';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -22,7 +21,6 @@ import { I18nProvider } from '../src/i18n/store';
 import { tokenCache } from '../src/auth/tokenCache';
 import { config } from '../src/lib/config';
 import { surface } from '../src/theme/tokens';
-import { ErrorState, LoadingState } from '../src/ui/State';
 
 /**
  * THE NATIVE SPLASH IS NOT HELD, AND THAT IS THE FIX.
@@ -47,49 +45,43 @@ import { ErrorState, LoadingState } from '../src/ui/State';
  * draw that may never be scheduled, which is why the timeout added alongside
  * this would not have saved it either.
  *
- * WHAT WE GIVE UP, AND WHY IT IS NOTHING. Holding it bought one thing: no
- * flash of the sign-in screen before a restored session resolves. The root now
- * renders its own dark `LoadingState` while `isLoaded` is false, so the first
- * React frame is already the right screen -- the same result, in our own code,
- * where a failure is visible and recoverable.
+ * WHAT WE GIVE UP. Holding it bought one thing: no flash of the sign-in screen
+ * before a restored session resolves. That flash is the cost, and it is the
+ * right trade -- a frame of the wrong screen is recoverable in a way that a
+ * permanently undrawn app is not. The navigator's own `contentStyle` is
+ * `surface.bg0`, so the gap is dark rather than white.
+ *
+ * Do NOT re-add a hold here to remove that flash. The screens below already
+ * gate on their own state; see the note under this one for what happened when
+ * this component tried to make that judgement instead.
  */
 
-/**
- * How long the splash may hide the app while Clerk starts up.
+/*
+ * WHY THERE IS NO STARTUP TIMEOUT OR OVERLAY HERE ANY MORE.
  *
- * ══════════════════════════════════════════════════════════════════════════
- *  THE BUG THIS EXISTS TO FIX
- * ══════════════════════════════════════════════════════════════════════════
- * `hideAsync` used to be called ONLY from inside the effect guarded by Clerk's
- * `isLoaded`. So "Clerk never finishes loading" and "the app never starts"
- * were the same event: the logo stayed on screen, forever, with no message, no
- * retry and nothing in the logs. Observed on a real device — the process alive,
- * the JS bundle loaded, React resumed, and not one text node rendered.
+ * There was one, and it broke the app worse than the bug it was written for.
  *
- * Any of these produces it: no signal at a ground, a captive portal on club
- * Wi-Fi, Clerk's frontend API unreachable, or a token cache holding a session
- * minted by a DIFFERENT Clerk instance — which is what a build switched from
- * the development key to the live one inherits, because the install is an
- * update and SecureStore survives it.
+ * It gated a full-screen overlay on Clerk's `isLoaded` from THIS component and
+ * gave it a ten-second budget. On the device the overlay latched permanently
+ * over a completely working app: a uiautomator dump showed the Matches screen
+ * and all five tabs rendered underneath the "could not reach the sign-in
+ * service" panel. `(app)/_layout.tsx` only renders those tabs once the
+ * organisation is active, which cannot happen unless Clerk HAS loaded -- so
+ * Clerk was up, and the root's own `isLoaded` was still reporting false.
  *
- * Ten seconds: long enough that a slow-but-working start never flashes this,
- * short enough that nobody standing on a touchline concludes the app is dead.
- * Clerk normally settles in under two.
+ * `@clerk/expo` Core 3 is signal-based. This component read `isLoaded` on its
+ * first render, got false, and never re-rendered when the signal settled. Any
+ * UI this component gates on that value is therefore permanent.
+ *
+ * The lesson is narrow and worth keeping: the ROOT does not get to decide
+ * whether the app is ready. The screens below already gate on their own state
+ * and render their own loading and error copy -- `(app)/_layout.tsx` has
+ * "Finding your club", the club gate, and the no-club screen. Duplicating that
+ * judgement up here added a second opinion that could not be revised.
  */
-const CLERK_STARTUP_BUDGET_MS = 10_000;
 
 function RootNavigator() {
   const { isLoaded, isSignedIn } = useAuth();
-  /**
-   * Has the startup budget run out with Clerk still not ready?
-   *
-   * Kept separate from `isLoaded` rather than folded into it, because they
-   * mean different things and the screen has to say which: not-loaded-yet is a
-   * spinner, and not-loaded-after-ten-seconds is a failure with a retry.
-   */
-  const [startupTimedOut, setStartupTimedOut] = useState(false);
-  /** Bumped by the retry, to re-arm the budget for another attempt. */
-  const [attempt, setAttempt] = useState(0);
   const segments = useSegments();
   const router = useRouter();
 
@@ -110,16 +102,6 @@ function RootNavigator() {
   }, []);
 
   useEffect(() => {
-    if (isLoaded) {
-      return;
-    }
-    const timer = setTimeout(() => {
-      setStartupTimedOut(true);
-    }, CLERK_STARTUP_BUDGET_MS);
-    return () => { clearTimeout(timer); };
-  }, [isLoaded, attempt]);
-
-  useEffect(() => {
     if (!isLoaded) {
       return;
     }
@@ -135,17 +117,7 @@ function RootNavigator() {
     }
   }, [isLoaded, isSignedIn, segments, router]);
 
-  /* THE NAVIGATOR IS ALWAYS MOUNTED, AND THE STARTUP UI GOES OVER IT.
-     The previous version returned the loading and error screens INSTEAD of
-     <Stack>. That is the thing to avoid in an expo-router root layout: the
-     root must mount a navigator on every render, and a root that sometimes
-     renders a plain View leaves the router with no navigator at all -- which
-     is a different failure from the one it was trying to report, and a harder
-     one to see.
-
-     So the states are an overlay. The navigator stays mounted underneath from
-     the first frame, and the overlay covers it until Clerk has settled. */
-  const stack = (
+  return (
     <Stack
       screenOptions={{
         headerShown: false,
@@ -158,52 +130,8 @@ function RootNavigator() {
       <Stack.Screen name="(app)" />
     </Stack>
   );
-
-  return (
-    <View style={styles.root}>
-      {stack}
-      {isLoaded ? null : (
-        <View style={styles.startupOverlay}>
-          {startupTimedOut ? (
-            <ErrorState
-              message={
-                'RiseUp could not reach the sign-in service. This is almost always the '
-                + 'connection \u2014 check signal or Wi-Fi and try again. Nothing on this '
-                + 'phone has been lost.'
-              }
-              code="auth_unreachable"
-              onRetry={() => {
-                setStartupTimedOut(false);
-                setAttempt((n) => n + 1);
-              }}
-            />
-          ) : (
-            <LoadingState label="Starting RiseUp" />
-          )}
-        </View>
-      )}
-    </View>
-  );
 }
 
-const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: surface.bg0,
-  },
-  startupOverlay: {
-    // Covers the navigator rather than replacing it. Opaque, so a half-built
-    // screen underneath is never visible through it.
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: surface.bg0,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
 
 export default function RootLayout() {
   return (
