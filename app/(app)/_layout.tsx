@@ -41,45 +41,76 @@ export default function AppLayout() {
   const { isLoaded, isSignedIn } = useAuth();
   const router = useRouter();
 
-  /* ── THE SERVER'S 401 IS THE GROUND TRUTH, AND IT IS CHECKED IN BOTH
-     BRANCHES ────────────────────────────────────────────────────────────────
-     This guard lived in `SignedInLayout` and therefore never ran for the one
-     person who needed it. The branch below returns `<AppStack />` whenever
-     Clerk does not report a session, so a signed-out user never mounted
-     `SignedInLayout` at all -- they sat in the app shell with every query
-     401ing, which is what "signing out does nothing" and "the match list is
-     stuck reloading" both looked like from the outside.
+  /* ── DECIDE WHETHER THERE IS A SESSION, THEN LOAD. IN THAT ORDER ──────────
+     Two things went wrong here before, and the order is what fixes both.
 
-     The comment that used to be here said "the root layout is redirecting to
-     sign-in". It is not: that redirect is gated on Clerk's `isLoaded` as read
-     by a component that reads it once and never re-renders, because
-     `@clerk/expo` Core 3 is signal-based. Relying on it is what produced both
-     bugs.
+     It used to render `<AppStack />` whenever Clerk had not reported a
+     session, which is why closing and reopening the app showed the regular UI
+     first and the sign-in screen a moment later: a signed-out person was shown
+     somebody's match list, tabs and all, before being bounced out of it.
 
-     So the decision is taken from the API's answer, which is available in
-     either branch: `useMe` is a shared cached query, so asking for it here
-     costs nothing extra, and when there is no usable session it answers 401 --
-     the one fact that is true regardless of what the client's signals say.
+     Then it waited on `/me` before rendering anything, which removed the flash
+     by making EVERY cold start wait on a network round trip -- including the
+     signed-out one, whose answer was already known on the device.
 
-     `isNoClubError` is excluded deliberately. A legitimate member with no
-     active organisation also gets a 403, and bouncing them to sign-in would be
-     a loop they cannot escape by signing in again; the no-club screen below is
-     the right destination for them. */
+     So: Clerk's own state answers first, because it is local and instant. The
+     server is the backstop, not the primary check.
+
+     WHY CLERK'S SIGNALS ARE TRUSTED HERE AND NOT IN THE ROOT. The root reads
+     `useAuth()` once and never re-renders, so its values calcify -- that is
+     what froze the startup overlay and what fought the sign-out redirect. This
+     component mounts after the provider has settled and re-renders normally;
+     observed doing so, taking both branches correctly. But it is not trusted
+     ALONE, which is what the 401 backstop below is for: if these signals ever
+     calcify here too, the server's answer still gets the user out. */
   const me = useMe();
   const rejectedByServer = isAuthError(me.error) && !isNoClubError(me.error);
+
+  /* `isSignedIn === false` is a DEFINITE answer, not merely a falsy one.
+     `undefined` means Clerk has not decided yet, and treating that as
+     signed-out is what would send a perfectly valid session to the sign-in
+     screen on every cold start. */
+  const definitelySignedOut = isLoaded && isSignedIn === false;
+  const leaving = definitelySignedOut || rejectedByServer;
+
   useEffect(() => {
-    if (rejectedByServer) {
+    if (leaving) {
       router.replace('/(auth)/sign-in');
     }
-  }, [rejectedByServer, router]);
+  }, [leaving, router]);
 
-  // Nothing below here may run without a session. Rendering the bare stack
-  // while Clerk is still settling avoids both the Clerk warning and a flash of
-  // the loading state; the guard above is what gets somebody OUT of it.
-  if (!isLoaded || !isSignedIn) {
-    return <AppStack />;
+  if (leaving) {
+    // Already navigating. A neutral frame, never the app shell.
+    return (
+      <Screen edges={['top', 'bottom']}>
+        <LoadingState label="Signing out" />
+      </Screen>
+    );
   }
 
+  /* Clerk says there IS a session: render immediately. No network wait, and
+     `me` resolves underneath into the club gate below. */
+  if (isLoaded && isSignedIn === true) {
+    return <SignedInLayout />;
+  }
+
+  /* Clerk has not decided. Wait on the server's answer rather than guessing --
+     and show a neutral screen while waiting, because the alternative is the
+     app shell, which is the flash this whole branch exists to remove.
+
+     This cannot hang on a calcified signal: `me` settles either way, and the
+     client bounds both the token fetch and the request itself. */
+  if (me.isPending) {
+    return (
+      <Screen edges={['top', 'bottom']}>
+        <LoadingState label="Opening RiseUp" />
+      </Screen>
+    );
+  }
+
+  /* `me` answered without an auth error -- a session the signals had not
+     caught up with, or an offline error on a screen that works without a
+     network. Either way the app is the right thing to show. */
   return <SignedInLayout />;
 }
 
