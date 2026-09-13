@@ -69,6 +69,7 @@ import {
 
 import { probeSSOAvailability, usableOptions, type SSOOption } from '../../src/auth/sso';
 import { links, openLink } from '../../src/lib/links';
+import { INTERACTIVE_BUDGET_MS, isTimeoutError, withTimeout } from '../../src/lib/withTimeout';
 import { ink, line, radius, role, space, surface, type } from '../../src/theme/tokens';
 import { Button } from '../../src/ui/Button';
 import { Row, Screen, Spacer } from '../../src/ui/Layout';
@@ -122,7 +123,7 @@ export default function SignInScreen() {
     if (signIn.status !== 'complete') {
       return false;
     }
-    const { error: finalizeError } = await signIn.finalize();
+    const { error: finalizeError } = await withTimeout(signIn.finalize(), INTERACTIVE_BUDGET_MS, 'Signing in');
     if (finalizeError !== null) {
       setError(clerkMessage(finalizeError));
       return false;
@@ -144,7 +145,9 @@ export default function SignInScreen() {
       // caught would silently treat "no such account" as success and advance
       // the user to a password field for an account that does not exist, so
       // every call checks the returned error before reading status.
-      const { error: createError } = await signIn.create({ identifier: email.trim() });
+      const { error: createError } = await withTimeout(
+        signIn.create({ identifier: email.trim() }),
+        INTERACTIVE_BUDGET_MS, 'The sign-in service');
       if (createError !== null) {
         setError(clerkMessage(createError));
         return;
@@ -172,9 +175,9 @@ export default function SignInScreen() {
       }
 
       if (emailFactor !== undefined) {
-        const { error: sendError } = await signIn.emailCode.sendCode({
+        const { error: sendError } = await withTimeout(signIn.emailCode.sendCode({
           emailAddressId: emailFactor.emailAddressId,
-        });
+        }), INTERACTIVE_BUDGET_MS, 'Sending your code');
         if (sendError !== null) {
           setError(clerkMessage(sendError));
           return;
@@ -210,10 +213,10 @@ export default function SignInScreen() {
     setError(null);
     setBusy(true);
     try {
-      const { error: passwordError } = await signIn.password({
+      const { error: passwordError } = await withTimeout(signIn.password({
         identifier: email.trim(),
         password,
-      });
+      }), INTERACTIVE_BUDGET_MS, 'Checking your password');
       if (passwordError !== null) {
         setError(clerkMessage(passwordError));
         return;
@@ -242,9 +245,9 @@ export default function SignInScreen() {
     setError(null);
     setBusy(true);
     try {
-      const { error: sendError } = await signIn.emailCode.sendCode({
+      const { error: sendError } = await withTimeout(signIn.emailCode.sendCode({
         emailAddressId: emailFactorId,
-      });
+      }), INTERACTIVE_BUDGET_MS, 'Sending your code');
       if (sendError !== null) {
         setError(clerkMessage(sendError));
         return;
@@ -264,7 +267,9 @@ export default function SignInScreen() {
     setError(null);
     setBusy(true);
     try {
-      const { error: verifyError } = await signIn.emailCode.verifyCode({ code: code.trim() });
+      const { error: verifyError } = await withTimeout(
+        signIn.emailCode.verifyCode({ code: code.trim() }),
+        INTERACTIVE_BUDGET_MS, 'Checking your code');
       if (verifyError !== null) {
         setError(clerkMessage(verifyError));
         return;
@@ -289,9 +294,9 @@ export default function SignInScreen() {
       setError(null);
       setBusy(true);
       try {
-        const { createdSessionId, setActive: activate } = await startSSOFlow({
+        const { createdSessionId, setActive: activate } = await withTimeout(startSSOFlow({
           strategy: option.strategy,
-        });
+        }), INTERACTIVE_BUDGET_MS, 'The sign-in provider');
         if (createdSessionId !== null && createdSessionId !== undefined && activate !== undefined) {
           await activate({ session: createdSessionId });
           router.replace('/');
@@ -537,6 +542,16 @@ function Field({ label, ...props }: React.ComponentProps<typeof TextInput> & { l
  * which at a ground with no signal is precisely the wrong thing to tell someone.
  */
 function clerkMessage(e: unknown): string {
+  /* A HANG AND A REFUSAL ARE DIFFERENT PROBLEMS, so they do not share copy.
+     "The server said no" is usually about the request; "the server said
+     nothing" is always about reaching it, and the only useful advice differs.
+     Checked first, because a TimeoutError carries none of the Clerk shapes
+     below and would otherwise fall through to the generic line. */
+  if (isTimeoutError(e)) {
+    return `${e.message} That is almost always the connection — check signal `
+      + 'or Wi-Fi and try again.';
+  }
+
   // Core 3's ClerkError. Identified structurally rather than with `instanceof`,
   // which breaks across duplicated copies of the package in a bundle.
   const direct = e as { clerkError?: boolean; message?: string; longMessage?: string };

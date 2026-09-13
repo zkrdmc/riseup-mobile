@@ -24,6 +24,8 @@ const marker = require('../../../../.smoke/capture/sync/marker');
 
 let pass = 0;
 let fail = 0;
+/* Async checks; the summary waits on these. */
+const pending = [];
 
 function check(name, condition, detail) {
   if (condition) {
@@ -1269,7 +1271,52 @@ console.log('25. Fixture reminders, scheduled on the phone rather than pushed');
         && tbc[0].title === 'Kick-off soon', tbc[0] && tbc[0].title);
 }
 
-console.log(`\n${'='.repeat(60)}`);
-console.log(`  ${pass} passed, ${fail} failed`);
-console.log('='.repeat(60));
-process.exit(fail === 0 ? 0 : 1);
+console.log('');
+console.log('26. A call that never answers must not spin forever');
+{
+  const { withTimeout, isTimeoutError, TimeoutError } =
+    require('../../../../.smoke/lib/withTimeout');
+
+  const never = () => new Promise(() => {});
+  const after = (ms, value) => new Promise((r) => setTimeout(() => r(value), ms));
+
+  // The case both real bugs took: a promise that simply never settles.
+  // `setBusy(false)` in a `finally` is correct and useless against it -- a
+  // finally cannot run for an await that does not return.
+  pending.push(withTimeout(never(), 30, 'The sign-in service').then(
+    () => check('a hang rejects rather than spinning forever', false, 'it resolved'),
+    (e) => {
+      check('a hang rejects rather than spinning forever', isTimeoutError(e));
+      check('and the message names what did not answer',
+            e.message.includes('The sign-in service'), e.message);
+    }));
+
+  // The happy path must be untouched. A budget that changed the result of a
+  // working call would be worse than the bug it was added for.
+  pending.push(withTimeout(after(5, 'ok'), 500, 'x').then(
+    (v) => check('a call that answers in time passes its value through', v === 'ok', v),
+    () => check('a call that answers in time passes its value through', false)));
+
+  // A real failure must stay a real failure rather than becoming a timeout.
+  pending.push(withTimeout(Promise.reject(new Error('no such account')), 500, 'x').then(
+    () => check('a rejection is not swallowed or relabelled', false, 'it resolved'),
+    (e) => check('a rejection is not swallowed or relabelled',
+                 !isTimeoutError(e) && e.message === 'no such account', e.message)));
+
+  // Structural, because a bundle can hold two copies of a module and
+  // `instanceof` quietly stops matching across them -- the same reason
+  // `clerkMessage` identifies ClerkError structurally.
+  check('a timeout is recognised structurally, not by instanceof',
+        isTimeoutError({ name: 'TimeoutError' }) === true);
+  check('and an ordinary error is not mistaken for one',
+        isTimeoutError(new Error('nope')) === false);
+  check('the error carries what it was waiting on, for the caller to read',
+        new TimeoutError('Signing in', 15000).what === 'Signing in');
+}
+
+Promise.all(pending).then(() => {
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`  ${pass} passed, ${fail} failed`);
+  console.log('='.repeat(60));
+  process.exit(fail === 0 ? 0 : 1);
+});
