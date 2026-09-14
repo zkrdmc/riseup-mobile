@@ -13,6 +13,7 @@ import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect } from 'react';
+import { Platform } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 
@@ -178,7 +179,24 @@ export default function RootLayout() {
         <ClerkProvider
           publishableKey={config.clerkPublishableKey}
           tokenCache={tokenCache}
-          __experimental_disableNativeClientSync
+          /* iOS ONLY, and this is the whole point of the split.
+
+             The flag tells the provider not to mount the JS-to-native client
+             sync, which is correct when the native module is absent — and on
+             iOS it is absent on purpose, because linking it drags the app's
+             deployment target to 17.0 and stops every iOS 16 iPhone installing
+             RiseUp. The clubs this is for share handsets and keep them years.
+
+             On ANDROID the module is present and must be used. Setting this
+             there was the bug: measured on a device, the app never opened a
+             single connection to Clerk — not at launch, not on sign-in — and
+             that one fact produced every auth symptom at once. `isLoaded`
+             never became true, so the startup overlay froze and the sign-out
+             redirect fought its own navigation. `getToken()` never settled, so
+             every API call hung on pending/fetching with no error.
+             `signIn.create()` never settled, so Continue span forever. Four
+             bugs, one cause. */
+          __experimental_disableNativeClientSync={Platform.OS === 'ios'}
         >
           <ApiProvider baseUrl={config.apiUrl}>
             {/* Inside Clerk because it reads the signed-in user to sync the
