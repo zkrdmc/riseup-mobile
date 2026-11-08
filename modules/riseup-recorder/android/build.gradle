@@ -1,0 +1,26 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'co.riseupai.mobile.recorder'
+version = '0.1.0'
+
+android {
+  namespace "co.riseupai.mobile.recorder"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+repositories {
+  mavenCentral()
+}
+
+// No dependencies beyond the platform: Camera2, MediaCodec and MediaMuxer are
+// all android.*. A camera library on top would own the encoder, and owning the
+// encoder is the whole point (see SegmentRecorder.kt).

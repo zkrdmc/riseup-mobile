@@ -21,6 +21,7 @@ const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
 const marker = require('../../../../.smoke/capture/sync/marker');
+const rq = require('../../../../.smoke/capture/record/recordingQueue');
 
 let pass = 0;
 let fail = 0;
@@ -1312,6 +1313,23 @@ console.log('26. A call that never answers must not spin forever');
         isTimeoutError(new Error('nope')) === false);
   check('the error carries what it was waiting on, for the caller to read',
         new TimeoutError('Signing in', 15000).what === 'Signing in');
+}
+
+/* ── Recorded chunk queue (src/capture/record/recordingQueue.ts) ───────── */
+{
+  const chunk = (sequence, status, nextAttemptAt = 0) => ({
+    manifest: { sequence }, uri: `file:///s${sequence}.mp4`, status, attempts: 0, nextAttemptAt, error: null,
+  });
+  check('the oldest unconfirmed chunk goes first',
+        rq.nextChunkToSend([chunk(2, 'pending'), chunk(0, 'confirmed'), chunk(1, 'pending')], 10).manifest.sequence === 1);
+  check('a chunk backing off is skipped for one that is due',
+        rq.nextChunkToSend([chunk(1, 'pending', 99), chunk(2, 'pending', 0)], 10).manifest.sequence === 2);
+  check('only chunks backing off means wait',
+        rq.nextChunkToSend([chunk(1, 'pending', 99)], 10) === 'wait');
+  check('everything confirmed means nothing to send',
+        rq.nextChunkToSend([chunk(0, 'confirmed')], 10) === null);
+  check('retry backoff starts at 2 s and stops at 60 s',
+        rq.backoffMs(1) === 2000 && rq.backoffMs(2) === 4000 && rq.backoffMs(20) === 60000);
 }
 
 Promise.all(pending).then(() => {
