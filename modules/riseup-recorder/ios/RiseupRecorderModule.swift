@@ -25,7 +25,7 @@ public class RiseupRecorderModule: Module {
   public func definition() -> ModuleDefinition {
     Name("RiseupRecorder")
 
-    Events("onSegment", "onError", "onState")
+    Events("onSegment", "onError", "onState", "onPaused", "onResumed")
 
     View(RecorderPreviewView.self) {}
 
@@ -61,13 +61,16 @@ public class RiseupRecorderModule: Module {
         height: (options["height"] as? NSNumber)?.intValue ?? 1080,
         fps: (options["fps"] as? NSNumber)?.intValue ?? 25,
         bitRate: (options["bitRate"] as? NSNumber)?.intValue ?? 16_000_000,
-        widest: (options["widest"] as? Bool) ?? true)
+        widest: (options["widest"] as? Bool) ?? true,
+        codec: (options["codec"] as? String) ?? "hevc",
+        sequenceStart: (options["sequenceStart"] as? NSNumber)?.intValue ?? 0,
+        ptsOffsetNs: (options["ptsOffsetNs"] as? NSNumber)?.int64Value ?? 0)
       let r = SegmentRecorder(session: RecorderHub.session, options: opts)
-      r.onStarted = { [weak self] startedAt, w, h, fps, lens in
+      r.onStarted = { [weak self] startedAt, w, h, fps, lens, codec in
         guard let self else { return }
         self.setState("recording")
         self.startPromise?.resolve(["startedAtMs": startedAt, "width": w, "height": h, "fps": fps,
-                                    "lens": lens])
+                                    "lens": lens, "codec": codec])
         self.startPromise = nil
       }
       r.onSegment = { [weak self] s in
@@ -76,6 +79,7 @@ public class RiseupRecorderModule: Module {
           "startPtsNs": Double(s.startPtsNs), "endPtsNs": Double(s.endPtsNs),
           "frameCount": s.frameCount, "byteLength": Double(s.byteLength),
           "sha256": s.sha256, "final": s.final, "droppedFrames": s.droppedFrames,
+          "codec": s.codec, "bitRate": s.bitRate,
         ])
       }
       r.onError = { [weak self] code, message in
@@ -83,6 +87,14 @@ public class RiseupRecorderModule: Module {
         self.sendEvent("onError", ["code": code, "message": message])
         self.startPromise?.reject(code, message)
         self.startPromise = nil
+      }
+      r.onPaused = { [weak self] atNs, reason in
+        self?.setState("paused")
+        self?.sendEvent("onPaused", ["atNs": Double(atNs), "reason": reason])
+      }
+      r.onResumed = { [weak self] in
+        self?.setState("recording")
+        self?.sendEvent("onResumed", [:])
       }
       r.onStopped = { [weak self] in
         guard let self else { return }
@@ -97,6 +109,45 @@ public class RiseupRecorderModule: Module {
       self.startPromise = promise
       self.setState("starting")
       r.start()
+    }
+
+    /** Hand one file to iOS for upload (BackgroundUploader): it continues
+     * while the app is suspended or terminated. Outcome: `uploadStatus(id)`. */
+    Function("enqueueUpload") { (request: [String: Any]) in
+      guard let id = request["id"] as? String,
+            var file = request["file"] as? String,
+            let urlString = request["url"] as? String,
+            let url = URL(string: urlString) else {
+        throw Exception(name: "ERR_BAD_REQUEST", description: "id, file and url are required.")
+      }
+      if file.hasPrefix("file://") { file = String(file.dropFirst(7)) }
+      let headers = (request["headers"] as? [String: Any])?.mapValues { "\($0)" } ?? [:]
+      BackgroundUploader.shared.enqueue(
+        id: id, file: URL(fileURLWithPath: file), url: url,
+        method: request["method"] as? String ?? "PUT", headers: headers)
+    }
+
+    Function("uploadStatus") { (id: String) -> String? in
+      BackgroundUploader.shared.status(id)
+    }
+
+    Function("forgetUpload") { (id: String) in
+      BackgroundUploader.shared.forget(id)
+    }
+
+    /** Pulled from the casing: close the segment non-final, stop the camera. */
+    Function("pause") { (reason: String) in
+      self.recorder?.pause(reason)
+    }
+
+    /** Back in the casing: the next segment continues the session clock. */
+    Function("resume") {
+      self.recorder?.resume()
+    }
+
+    /** The next segment's bitrate (the upload ladder); a no-op when idle. */
+    Function("setBitRate") { (bps: Int) in
+      self.recorder?.setBitRate(bps)
     }
 
     AsyncFunction("stop") { (promise: Promise) in

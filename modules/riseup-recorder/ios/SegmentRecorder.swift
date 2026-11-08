@@ -30,6 +30,12 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let bitRate: Int
     /** The ultra-wide camera when the phone has one (Zak, 9 Nov 2026). */
     let widest: Bool
+    /** "hevc" (default) or "h264"; HEVC falls back to H.264 when the writer
+     * cannot take it. */
+    let codec: String
+    /** Continuing a session after the app was killed (see Android). */
+    let sequenceStart: Int
+    let ptsOffsetNs: Int64
   }
 
   struct Segment {
@@ -42,13 +48,25 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let sha256: String
     let final: Bool
     let droppedFrames: Int
+    let codec: String
+    let bitRate: Int
   }
 
-  var onStarted: ((Int64, Int, Int, Int, String) -> Void)?
+  var onStarted: ((Int64, Int, Int, Int, String, String) -> Void)?
+  /** "hevc" or "h264": what the writers actually use. */
+  private(set) var codecName = "h264"
+  /** The rate the next writer is made with (`setBitRate`); the prepared
+   * writer is remade when it changes, so every segment has one rate. */
+  private var bitRate: Int
+  private var writerBitRate: [ObjectIdentifier: Int] = [:]
   /** Which camera module recorded: "ultrawide" or "wide". */
   private(set) var lens = "wide"
   var onSegment: ((Segment) -> Void)?
   var onError: ((String, String) -> Void)?
+  /** The camera stopped; the last segment closed (not final) at this
+   * session-clock time (ns). */
+  var onPaused: ((Int64, String) -> Void)?
+  var onResumed: (() -> Void)?
   var onStopped: (() -> Void)?
 
   let session: AVCaptureSession
@@ -70,10 +88,15 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   private var dropped = 0
   private var stopping = false
   private var finished = false
+  /** Pulled from the casing (Zak, 9 Nov 2026): frames are ignored until
+   * resume; the session clock and the sequence carry on. */
+  private var paused = false
 
   init(session: AVCaptureSession, options: Options) {
     self.session = session
     self.options = options
+    self.bitRate = options.bitRate
+    self.sequence = options.sequenceStart
     super.init()
   }
 
@@ -163,23 +186,30 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
       String(format: "segment-%05d.mp4", sequence))
     try? FileManager.default.removeItem(at: url)
     let w = try AVAssetWriter(outputURL: url, fileType: .mp4)
-    let settings: [String: Any] = [
-      AVVideoCodecKey: AVVideoCodecType.h264,
-      AVVideoWidthKey: options.width,
-      AVVideoHeightKey: options.height,
-      AVVideoCompressionPropertiesKey: [
-        AVVideoAverageBitRateKey: options.bitRate,
-        AVVideoMaxKeyFrameIntervalKey: options.fps,
-        AVVideoExpectedSourceFrameRateKey: options.fps,
-      ],
-    ]
-    let i = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
+    func settings(_ codec: AVVideoCodecType) -> [String: Any] {
+      [
+        AVVideoCodecKey: codec,
+        AVVideoWidthKey: options.width,
+        AVVideoHeightKey: options.height,
+        AVVideoCompressionPropertiesKey: [
+          AVVideoAverageBitRateKey: bitRate,
+          AVVideoMaxKeyFrameIntervalKey: options.fps,
+          AVVideoExpectedSourceFrameRateKey: options.fps,
+        ],
+      ]
+    }
+    let wantHevc = options.codec == "hevc"
+      && w.canApply(outputSettings: settings(.hevc), forMediaType: .video)
+    codecName = wantHevc ? "hevc" : "h264"
+    let i = AVAssetWriterInput(mediaType: .video,
+                               outputSettings: settings(wantHevc ? .hevc : .h264))
     i.expectsMediaDataInRealTime = true
     guard w.canAdd(i) else {
       throw NSError(domain: "RiseupRecorder", code: 4,
                     userInfo: [NSLocalizedDescriptionKey: "The writer refused the video input."])
     }
     w.add(i)
+    writerBitRate[ObjectIdentifier(w)] = bitRate
     guard w.startWriting() else {
       throw w.error ?? NSError(domain: "RiseupRecorder", code: 5,
                                userInfo: [NSLocalizedDescriptionKey: "The writer would not start."])
@@ -191,12 +221,12 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
 
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                      from connection: AVCaptureConnection) {
-    if stopping || finished { return }
+    if stopping || finished || paused { return }
     let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
     if !firstPts.isValid {
       firstPts = pts
       onStarted?(Int64(Date().timeIntervalSince1970 * 1000), options.width, options.height,
-                 options.fps, lens)
+                 options.fps, lens, codecName)
     }
     do {
       if writer == nil {
@@ -252,6 +282,8 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let count = frames
     let lost = dropped
     dropped = 0
+    let rate = writerBitRate.removeValue(forKey: ObjectIdentifier(w)) ?? bitRate
+    let codecUsed = codecName
     w.endSession(atSourceTime: end)
     i.markAsFinished()
     io.async { [self] in
@@ -266,12 +298,61 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
       let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
       onSegment?(Segment(path: url.path, sequence: seq, startPtsNs: startNs, endPtsNs: endNs,
                          frameCount: count, byteLength: size,
-                         sha256: Self.sha256(url), final: final, droppedFrames: lost))
+                         sha256: Self.sha256(url), final: final, droppedFrames: lost,
+                         codec: codecUsed, bitRate: rate))
     }
   }
 
+  /** Session-clock nanoseconds: this recorder's clock plus where it sits on
+   * the session (non-zero only when continuing after the app was killed). */
   private func nanos(_ t: CMTime) -> Int64 {
-    Int64((CMTimeGetSeconds(t) * 1_000_000_000).rounded())
+    Int64((CMTimeGetSeconds(t) * 1_000_000_000).rounded()) + options.ptsOffsetNs
+  }
+
+  /** The next segment's rate (the upload ladder). The writer prepared ahead
+   * was made at the old rate, so it is remade. */
+  func setBitRate(_ bps: Int) {
+    queue.async { [self] in
+      guard bps != bitRate, !stopping, !finished else { return }
+      bitRate = bps
+      if let (w, _, url) = next {
+        w.cancelWriting()
+        try? FileManager.default.removeItem(at: url)
+        next = try? makeWriter(sequence: sequence + (writer == nil ? 0 : 1))
+      }
+    }
+  }
+
+  // MARK: pause / resume
+
+  /** Close the open segment NOT final and stop the camera. The host clock
+   * keeps running, so the next segment's PTS shows the gap exactly. */
+  func pause(_ reason: String) {
+    queue.async { [self] in
+      guard !finished, !stopping, !paused else { return }
+      paused = true
+      let frame = CMTime(value: 1, timescale: CMTimeScale(options.fps))
+      var atNs: Int64 = 0
+      if writer != nil {
+        let end = CMTimeAdd(lastPts, frame)
+        atNs = nanos(CMTimeSubtract(end, firstPts))
+        close(endingAt: end, final: false)
+      }
+      session.stopRunning()
+      io.async { [self] in onPaused?(atNs, reason) }
+    }
+  }
+
+  func resume() {
+    queue.async { [self] in
+      guard !finished, !stopping, paused else { return }
+      paused = false
+      if next == nil {
+        next = try? makeWriter(sequence: sequence)
+      }
+      session.startRunning()
+      io.async { [self] in onResumed?() }
+    }
   }
 
   // MARK: stop
@@ -281,7 +362,7 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
       guard !finished else { return }
       stopping = true
       session.stopRunning()
-      if writer != nil {
+      if writer != nil && !paused {
         let frame = CMTime(value: 1, timescale: CMTimeScale(options.fps))
         close(endingAt: CMTimeAdd(lastPts, frame), final: true)
       }

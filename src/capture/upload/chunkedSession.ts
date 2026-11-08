@@ -169,6 +169,7 @@ export async function registerChunk(
     deviceId: manifest.deviceId,
     recordedAt: manifest.recordedAt,
     final: manifest.final,
+    ...(manifest.gapBeforeMs ? { gapBeforeMs: manifest.gapBeforeMs } : {}),
   });
 }
 

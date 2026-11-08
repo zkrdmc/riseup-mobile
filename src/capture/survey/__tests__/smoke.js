@@ -22,6 +22,7 @@ const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
 const marker = require('../../../../.smoke/capture/sync/marker');
 const rq = require('../../../../.smoke/capture/record/recordingQueue');
+const mr = require('../../../../.smoke/capture/record/motionRule');
 
 let pass = 0;
 let fail = 0;
@@ -1328,6 +1329,40 @@ console.log('26. A call that never answers must not spin forever');
         rq.nextChunkToSend([chunk(1, 'pending', 99)], 10) === 'wait');
   check('everything confirmed means nothing to send',
         rq.nextChunkToSend([chunk(0, 'confirmed')], 10) === null);
+  check('a handed-over chunk is the OS uploader\'s, not sent again',
+        rq.nextChunkToSend([{ ...chunk(0, 'pending'), status: 'handed' }], 10) === null);
+  const ladder = { rungs: rq.HEVC_LADDER.length, segmentSeconds: 60 };
+  check('the HEVC ladder runs 12 down to 4 Mbit/s',
+        rq.HEVC_LADDER[0] === 12e6 && rq.HEVC_LADDER[rq.HEVC_LADDER.length - 1] === 4e6);
+  check('the H.264 ladder is the same x1.6',
+        rq.H264_LADDER[0] === 19.2e6 && rq.H264_LADDER[rq.H264_LADDER.length - 1] === 6.4e6);
+  check('more than a segment behind steps down one rung',
+        rq.nextRung({ ...ladder, rung: 0, backlogSeconds: 90, fastInARow: 0 }) === 1);
+  check('the floor is the floor',
+        rq.nextRung({ ...ladder, rung: 4, backlogSeconds: 300, fastInARow: 0 }) === 4);
+  check('three fast segments with nothing waiting step back up',
+        rq.nextRung({ ...ladder, rung: 2, backlogSeconds: 0, fastInARow: 3 }) === 1);
+  check('keeping pace changes nothing',
+        rq.nextRung({ ...ladder, rung: 2, backlogSeconds: 30, fastInARow: 1 }) === 2);
+  const span = (s, e, st = 'pending') => ({ manifest: { sequence: 0, startPtsNs: s, endPtsNs: e }, status: st });
+  check('the backlog is the unconfirmed seconds',
+        rq.backlogSeconds([span(0, 60e9, 'confirmed'), span(60e9, 120e9, 'handed'), span(120e9, 150e9)]) === 90);
+  check('a join declares no gap', rq.gapBeforeMs(60e9, 60e9 + 1e6) === 0);
+  check('a pause declares its length', rq.gapBeforeMs(60e9, 75.5e9) === 15500);
+  check('the first chunk declares nothing', rq.gapBeforeMs(null, 3e9) === 0);
+  // Motion: sustained, not peaks.
+  const series = (from, to, mag) => {
+    const out = [];
+    for (let t = from; t <= to; t += 100) out.push({ t, magnitude: mag });
+    return out;
+  };
+  check('a jolt never pauses',
+        mr.motionVerdict([...series(0, 1000, 0.1), ...series(1100, 1300, 5)], 1300, 'still') === 'still');
+  check('carried for 1.5 s pauses',
+        mr.motionVerdict(series(0, 1600, 2.5), 1600, 'still') === 'moving');
+  check('still for 5 s resumes', mr.motionVerdict(series(0, 5200, 0.1), 5200, 'moving') === 'still');
+  check('half still keeps it paused',
+        mr.motionVerdict([...series(0, 2500, 0.1), ...series(2600, 5200, 1.0)], 5200, 'moving') === 'moving');
   check('retry backoff starts at 2 s and stops at 60 s',
         rq.backoffMs(1) === 2000 && rq.backoffMs(2) === 4000 && rq.backoffMs(20) === 60000);
 }

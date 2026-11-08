@@ -16,6 +16,7 @@ import { StyleSheet, Switch, View } from 'react-native';
 import { getRecorderPreview, isRiseupRecorderAvailable } from '../../modules/riseup-recorder';
 import { useApi } from '../../src/api/provider';
 import { matchRecording } from '../../src/capture/record/matchRecording';
+import { ladderFor } from '../../src/capture/record/recordingQueue';
 import { space, surface } from '../../src/theme/tokens';
 import { Button } from '../../src/ui/Button';
 import { Panel, Row, Screen, Spacer } from '../../src/ui/Layout';
@@ -109,12 +110,45 @@ export default function RecordScreen() {
         {state.phase === 'recording' ? (
           <Button label="Stop at the final whistle" onPress={stop} busy={busy} block variant="secondary" />
         ) : null}
+        {state.phase === 'paused' ? (
+          <>
+            <Body tone={2}>
+              {state.pauseReason === 'motion'
+                ? 'Paused: the phone is moving. Put it back in its casing and it carries on.'
+                : 'Paused. Put the phone back in its casing to carry on; this match stays open.'}
+            </Body>
+            <Spacer size={space[3]} />
+            <Button label="Resume recording" onPress={() => matchRecording.resume()} block />
+            <Spacer size={space[2]} />
+            <Button label="Stop at the final whistle" onPress={stop} busy={busy} block variant="secondary" />
+          </>
+        ) : null}
+        {state.phase === 'confirm_end' ? (
+          <>
+            <BodyStrong>Is the match finished?</BodyStrong>
+            <Spacer size={space[2]} />
+            <Body tone={2}>
+              Recording stopped when the phone left the app. If the match is still going (a break,
+              halftime), carry on and it stays one match.
+            </Body>
+            <Spacer size={space[3]} />
+            <Button label="Yes, the match is over" onPress={() => void matchRecording.confirmEnd('over')} block />
+            <Spacer size={space[2]} />
+            <Button label="No, keep recording" variant="secondary"
+                    onPress={() => void matchRecording.confirmEnd('continue')} block />
+          </>
+        ) : null}
         <Spacer size={space[3]} />
         <Label tone={3}>
-          {state.phase === 'recording' ? 'Recording' : state.phase === 'finishing' ? 'Sending the last minutes'
+          {state.phase === 'recording' ? 'Recording' : state.phase === 'paused' ? 'Paused'
+            : state.phase === 'finishing' ? 'Sending the last minutes'
+            : state.phase === 'confirm_end' ? 'Waiting for your answer'
             : state.phase === 'completed' ? 'Sent: the match is being processed'
             : state.phase === 'failed' ? 'Stopped' : 'Ready'}
           {state.chunks.length > 0 ? ` · ${confirmed} sent, ${waiting} waiting` : ''}
+          {state.phase === 'recording' || state.phase === 'paused'
+            ? ` · ${state.codec.toUpperCase()} ${(ladderFor(state.codec)[state.rung]! / 1e6).toFixed(0)} Mbit/s`
+            : ''}
         </Label>
         {error ?? lastError ? (
           <>

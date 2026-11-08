@@ -37,7 +37,7 @@ class RiseupRecorderModule : Module() {
   override fun definition() = ModuleDefinition {
     Name("RiseupRecorder")
 
-    Events("onSegment", "onError", "onState")
+    Events("onSegment", "onError", "onState", "onPaused", "onResumed")
 
     View(RecorderPreviewView::class) {}
 
@@ -67,17 +67,21 @@ class RiseupRecorderModule : Module() {
         fps = (options["fps"] as? Number)?.toInt() ?: 25,
         bitRate = (options["bitRate"] as? Number)?.toInt() ?: 16_000_000,
         widest = (options["widest"] as? Boolean) ?: true,
+        codec = (options["codec"] as? String) ?: "hevc",
+        sequenceStart = (options["sequenceStart"] as? Number)?.toInt() ?: 0,
+        ptsOffsetNs = (options["ptsOffsetNs"] as? Number)?.toLong() ?: 0L,
       )
       startPromise = promise
       setState("starting")
-      recorder = SegmentRecorder(context, opts, previewSurface, object : SegmentRecorder.Listener {
+      recorder = SegmentRecorder(context, opts, { previewSurface }, object : SegmentRecorder.Listener {
         override fun onStarted(startedAtMs: Long, width: Int, height: Int, fps: Int,
-                               zoomRatio: Float) {
+                               zoomRatio: Float, codec: String) {
           setState("recording")
           startPromise?.resolve(mapOf("startedAtMs" to startedAtMs, "width" to width,
                                       "height" to height, "fps" to fps,
                                       "lens" to if (zoomRatio < 1f) "ultrawide" else "wide",
-                                      "zoomRatio" to zoomRatio.toDouble()))
+                                      "zoomRatio" to zoomRatio.toDouble(),
+                                      "codec" to codec))
           startPromise = null
         }
 
@@ -93,6 +97,8 @@ class RiseupRecorderModule : Module() {
             "sha256" to segment.sha256,
             "final" to segment.final,
             "droppedFrames" to segment.droppedFrames,
+            "codec" to segment.codec,
+            "bitRate" to segment.bitRate,
           ))
         }
 
@@ -100,6 +106,16 @@ class RiseupRecorderModule : Module() {
           sendEvent("onError", mapOf("code" to code, "message" to message))
           startPromise?.reject(code, message, null)
           startPromise = null
+        }
+
+        override fun onPaused(atNs: Long, reason: String) {
+          setState("paused")
+          sendEvent("onPaused", mapOf("atNs" to atNs.toDouble(), "reason" to reason))
+        }
+
+        override fun onResumed() {
+          setState("recording")
+          sendEvent("onResumed", mapOf<String, Any>())
         }
 
         override fun onStopped() {
@@ -112,6 +128,56 @@ class RiseupRecorderModule : Module() {
         }
       })
       recorder?.start()
+    }
+
+    /** The phone left its casing (background, motion, operator): stop the
+     * camera, close the segment non-final. No-op when not recording. */
+    Function("pause") { reason: String ->
+      recorder?.pause(reason)
+    }
+
+    /** Back in the casing: the next segment continues the session clock. */
+    Function("resume") {
+      recorder?.resume()
+    }
+
+    /**
+     * Hand one file to the OS for upload (ChunkUploadWorker): it keeps going
+     * with the app in the background and after a kill. Returns at once; the
+     * outcome is `uploadStatus(id)`.
+     */
+    Function("enqueueUpload") { request: Map<String, Any?> ->
+      val context = appContext.reactContext
+        ?: throw CodedException("ERR_NO_CONTEXT", "The app is not ready.", null)
+      @Suppress("UNCHECKED_CAST")
+      val headers = (request["headers"] as? Map<String, Any?>)
+        ?.mapValues { it.value.toString() } ?: emptyMap()
+      ChunkUploadWorker.enqueue(
+        context,
+        id = request["id"] as? String
+          ?: throw CodedException("ERR_BAD_REQUEST", "id is required.", null),
+        file = (request["file"] as? String)?.removePrefix("file://")
+          ?: throw CodedException("ERR_BAD_REQUEST", "file is required.", null),
+        url = request["url"] as? String
+          ?: throw CodedException("ERR_BAD_REQUEST", "url is required.", null),
+        method = request["method"] as? String ?: "PUT",
+        headers = headers,
+        label = request["label"] as? String ?: "Sending the match",
+      )
+    }
+
+    /** "queued" | "uploading" | "done" | "retrying:<why>" | "failed:<why>" | null. */
+    Function("uploadStatus") { id: String ->
+      appContext.reactContext?.let { ChunkUploadWorker.status(it, id) }
+    }
+
+    Function("forgetUpload") { id: String ->
+      appContext.reactContext?.let { ChunkUploadWorker.forget(it, id) }
+    }
+
+    /** The next segment's bitrate (the upload ladder); a no-op when idle. */
+    Function("setBitRate") { bps: Int ->
+      recorder?.setBitRate(bps)
     }
 
     AsyncFunction("stop") { promise: Promise ->

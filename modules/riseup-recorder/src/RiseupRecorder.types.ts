@@ -24,7 +24,15 @@ export interface RecorderStartOptions {
   bitRate: number;
   /** The widest lens the phone has (ultra-wide). Default true. */
   widest?: boolean;
+  /** HEVC (default) falls back to H.264 on a phone without an HEVC encoder. */
+  codec?: RecorderCodec;
+  /** Continuing a session after the app was killed: the next segment number,
+   * and this recorder's zero on the session clock (approximate). */
+  sequenceStart?: number;
+  ptsOffsetNs?: number;
 }
+
+export type RecorderCodec = 'hevc' | 'h264';
 
 export interface RecorderStarted {
   /** Wall clock at the first frame, ms since the epoch. */
@@ -37,6 +45,8 @@ export interface RecorderStarted {
   lens: 'ultrawide' | 'wide';
   /** Android: the zoom ratio that selected it (below 1 = ultra-wide). */
   zoomRatio?: number;
+  /** What the encoder actually is (after any fallback). */
+  codec: RecorderCodec;
 }
 
 /**
@@ -63,6 +73,9 @@ export interface RecorderSegment {
   final: boolean;
   /** Frames the camera delivered that the encoder could not take. */
   droppedFrames: number;
+  /** What this segment was encoded with. */
+  codec: RecorderCodec;
+  bitRate: number;
 }
 
 export interface RecorderError {
@@ -70,10 +83,17 @@ export interface RecorderError {
   message: string;
 }
 
-export type RecorderState = 'idle' | 'starting' | 'recording' | 'stopping';
+export type RecorderState = 'idle' | 'starting' | 'recording' | 'paused' | 'stopping';
+
+/** Why a phone paused: it left the foreground, moved like a hand-held phone,
+ * the camera was taken away, or the operator asked. */
+export type PauseReason = 'background' | 'motion' | 'camera_lost' | 'operator';
 
 export type RecorderEvents = {
   onSegment: (segment: RecorderSegment) => void;
   onError: (error: RecorderError) => void;
   onState: (event: { state: RecorderState }) => void;
+  /** The last segment closed (not final) at `atNs` on the session clock. */
+  onPaused: (event: { atNs: number; reason: PauseReason }) => void;
+  onResumed: () => void;
 };

@@ -9,7 +9,7 @@
 
 import { useKeepAwake } from 'expo-keep-awake';
 import { Directory, Paths } from 'expo-file-system';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import {
@@ -28,13 +28,23 @@ export default function RecordTestScreen() {
   const Preview = getRecorderPreview();
   const [segments, setSegments] = useState<RecorderSegment[]>([]);
   const [status, setStatus] = useState('idle');
+  // Only this screen's own run: the recorder's events also carry a match
+  // recorded from the Record screen, and listing those here duplicated keys.
+  const ownRun = useRef(false);
 
   useEffect(() => {
     if (recorder === null) {
       return;
     }
     const subs = [
-      recorder.addListener('onSegment', (s) => setSegments((prev) => [...prev, s])),
+      recorder.addListener('onSegment', (s) => {
+        if (ownRun.current) {
+          setSegments((prev) => [...prev.filter((p) => p.sequence !== s.sequence), s]);
+          if (s.final) {
+            ownRun.current = false;
+          }
+        }
+      }),
       recorder.addListener('onError', (e) => setStatus(`error ${e.code}: ${e.message}`)),
       recorder.addListener('onState', (e) => setStatus(e.state)),
     ];
@@ -66,6 +76,7 @@ export default function RecordTestScreen() {
       }
       dir.create({ intermediates: true });
       setSegments([]);
+      ownRun.current = true;
       const started = await recorder.start({
         directory: dir.uri, segmentSeconds: 10, width: 1920, height: 1080, fps: 30,
         bitRate: 16_000_000, widest: true,
