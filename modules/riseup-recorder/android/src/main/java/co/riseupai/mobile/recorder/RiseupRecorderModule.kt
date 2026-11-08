@@ -66,14 +66,18 @@ class RiseupRecorderModule : Module() {
         height = (options["height"] as? Number)?.toInt() ?: 1080,
         fps = (options["fps"] as? Number)?.toInt() ?: 25,
         bitRate = (options["bitRate"] as? Number)?.toInt() ?: 16_000_000,
+        widest = (options["widest"] as? Boolean) ?: true,
       )
       startPromise = promise
       setState("starting")
       recorder = SegmentRecorder(context, opts, previewSurface, object : SegmentRecorder.Listener {
-        override fun onStarted(startedAtMs: Long, width: Int, height: Int, fps: Int) {
+        override fun onStarted(startedAtMs: Long, width: Int, height: Int, fps: Int,
+                               zoomRatio: Float) {
           setState("recording")
           startPromise?.resolve(mapOf("startedAtMs" to startedAtMs, "width" to width,
-                                      "height" to height, "fps" to fps))
+                                      "height" to height, "fps" to fps,
+                                      "lens" to if (zoomRatio < 1f) "ultrawide" else "wide",
+                                      "zoomRatio" to zoomRatio.toDouble()))
           startPromise = null
         }
 

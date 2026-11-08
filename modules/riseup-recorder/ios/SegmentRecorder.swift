@@ -28,6 +28,8 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let height: Int
     let fps: Int
     let bitRate: Int
+    /** The ultra-wide camera when the phone has one (Zak, 9 Nov 2026). */
+    let widest: Bool
   }
 
   struct Segment {
@@ -42,7 +44,9 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     let droppedFrames: Int
   }
 
-  var onStarted: ((Int64, Int, Int, Int) -> Void)?
+  var onStarted: ((Int64, Int, Int, Int, String) -> Void)?
+  /** Which camera module recorded: "ultrawide" or "wide". */
+  private(set) var lens = "wide"
   var onSegment: ((Segment) -> Void)?
   var onError: ((String, String) -> Void)?
   var onStopped: (() -> Void)?
@@ -90,8 +94,11 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
   }
 
   private func configureSession() throws {
-    guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video,
-                                               position: .back) else {
+    let ultraWide = options.widest
+      ? AVCaptureDevice.default(.builtInUltraWideCamera, for: .video, position: .back) : nil
+    lens = ultraWide == nil ? "wide" : "ultrawide"
+    guard let device = ultraWide ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video,
+                                                            position: .back) else {
       throw NSError(domain: "RiseupRecorder", code: 1,
                     userInfo: [NSLocalizedDescriptionKey: "No back camera."])
     }
@@ -189,7 +196,7 @@ final class SegmentRecorder: NSObject, AVCaptureVideoDataOutputSampleBufferDeleg
     if !firstPts.isValid {
       firstPts = pts
       onStarted?(Int64(Date().timeIntervalSince1970 * 1000), options.width, options.height,
-                 options.fps)
+                 options.fps, lens)
     }
     do {
       if writer == nil {

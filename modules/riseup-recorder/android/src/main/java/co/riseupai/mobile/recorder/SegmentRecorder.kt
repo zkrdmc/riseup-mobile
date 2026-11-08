@@ -11,6 +11,7 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaFormat
 import android.media.MediaMuxer
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
@@ -58,6 +59,9 @@ class SegmentRecorder(
     val height: Int,
     val fps: Int,
     val bitRate: Int,
+    /** The widest field of view the camera offers (the ultra-wide module on
+     * a phone that has one): a match needs the whole pitch (Zak, 9 Nov 2026). */
+    val widest: Boolean = true,
   )
 
   data class Segment(
@@ -73,7 +77,7 @@ class SegmentRecorder(
   )
 
   interface Listener {
-    fun onStarted(startedAtMs: Long, width: Int, height: Int, fps: Int)
+    fun onStarted(startedAtMs: Long, width: Int, height: Int, fps: Int, zoomRatio: Float)
     fun onSegment(segment: Segment)
     fun onError(code: String, message: String)
     /** After the final segment was reported, or after a failure. */
@@ -103,6 +107,8 @@ class SegmentRecorder(
   private var syncRequested = false
   private var droppedBeforeKeyframe = 0
   private var finished = false
+  /** 1.0 unless the widest lens was selected through the zoom ratio. */
+  private var zoomRatio = 1f
 
   private val segmentUs: Long get() = (options.segmentSeconds * 1_000_000).toLong()
   private val frameUs: Long get() = 1_000_000L / options.fps.coerceAtLeast(1)
@@ -170,6 +176,10 @@ class SegmentRecorder(
         val request = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
           targets.forEach { addTarget(it) }
           fpsRange(characteristics)?.let { set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, it) }
+          widestZoom(characteristics)?.let {
+            set(CaptureRequest.CONTROL_ZOOM_RATIO, it)
+            zoomRatio = it
+          }
         }
         try {
           s.setRepeatingRequest(request.build(), null, handler)
@@ -184,12 +194,23 @@ class SegmentRecorder(
     }, handler)
   }
 
-  /** A fixed range at the asked rate when the camera has one: a variable
-   * rate would let the encoder's frame times drift from the nominal fps. */
+  /** A fixed range at the asked rate when the camera has one, else the
+   * tightest range containing it. A variable rate would let the frame times
+   * drift from the nominal fps. (Without this the Pixel 8a, which has no
+   * fixed 25 fps range, silently ran at 30 while the encoder was told 25.) */
   private fun fpsRange(c: CameraCharacteristics): Range<Int>? {
     val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return null
     return ranges.firstOrNull { it.lower == options.fps && it.upper == options.fps }
-      ?: ranges.filter { it.upper == options.fps }.maxByOrNull { it.lower }
+      ?: ranges.filter { it.lower <= options.fps && options.fps <= it.upper }
+        .minByOrNull { it.upper - it.lower }
+  }
+
+  /** The lowest zoom ratio of a logical camera, which is its ultra-wide
+   * module (API 30+). Null when not asked, not supported, or already 1x. */
+  private fun widestZoom(c: CameraCharacteristics): Float? {
+    if (!options.widest || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return null
+    val range = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE) ?: return null
+    return range.lower.takeIf { it < 1f }
   }
 
   /** How the stored frames must be rotated for display, for the phone held
@@ -241,7 +262,8 @@ class SegmentRecorder(
       if (firstPtsUs < 0) {
         firstPtsUs = pts
         nextBoundaryUs = pts + segmentUs
-        listener.onStarted(System.currentTimeMillis(), options.width, options.height, options.fps)
+        listener.onStarted(System.currentTimeMillis(), options.width, options.height, options.fps,
+                           zoomRatio)
       }
       when {
         muxer == null && !key -> droppedBeforeKeyframe++    // a file must open on a keyframe

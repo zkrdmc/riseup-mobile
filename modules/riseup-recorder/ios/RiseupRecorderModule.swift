@@ -60,12 +60,14 @@ public class RiseupRecorderModule: Module {
         width: (options["width"] as? NSNumber)?.intValue ?? 1920,
         height: (options["height"] as? NSNumber)?.intValue ?? 1080,
         fps: (options["fps"] as? NSNumber)?.intValue ?? 25,
-        bitRate: (options["bitRate"] as? NSNumber)?.intValue ?? 16_000_000)
+        bitRate: (options["bitRate"] as? NSNumber)?.intValue ?? 16_000_000,
+        widest: (options["widest"] as? Bool) ?? true)
       let r = SegmentRecorder(session: RecorderHub.session, options: opts)
-      r.onStarted = { [weak self] startedAt, w, h, fps in
+      r.onStarted = { [weak self] startedAt, w, h, fps, lens in
         guard let self else { return }
         self.setState("recording")
-        self.startPromise?.resolve(["startedAtMs": startedAt, "width": w, "height": h, "fps": fps])
+        self.startPromise?.resolve(["startedAtMs": startedAt, "width": w, "height": h, "fps": fps,
+                                    "lens": lens])
         self.startPromise = nil
       }
       r.onSegment = { [weak self] s in

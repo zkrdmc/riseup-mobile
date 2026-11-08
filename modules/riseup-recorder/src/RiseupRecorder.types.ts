@@ -22,6 +22,8 @@ export interface RecorderStartOptions {
   fps: number;
   /** Bits per second. */
   bitRate: number;
+  /** The widest lens the phone has (ultra-wide). Default true. */
+  widest?: boolean;
 }
 
 export interface RecorderStarted {
@@ -31,6 +33,10 @@ export interface RecorderStarted {
   width: number;
   height: number;
   fps: number;
+  /** The camera module that is recording. */
+  lens: 'ultrawide' | 'wide';
+  /** Android: the zoom ratio that selected it (below 1 = ultra-wide). */
+  zoomRatio?: number;
 }
 
 /**

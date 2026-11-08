@@ -28,6 +28,7 @@ import {
 import type { ApiClient } from '../../api/client';
 import type { ChunkManifest } from '../upload/chunkManifest';
 import {
+  abandonSession,
   completeSession,
   openSession,
   sendChunk,
@@ -38,8 +39,13 @@ import { backoffMs, nextChunkToSend, type QueuedChunk } from './recordingQueue';
 const STATE_KEY = 'riseup.matchRecording.v1';
 const DEVICE_KEY = 'riseup.deviceId';
 
-/** 1080p25 at 16 Mbit/s: ~120 MB a minute; the pipeline's broadcast rate. */
-export const RECORD_SETTINGS = { width: 1920, height: 1080, fps: 25, bitRate: 16_000_000 };
+/**
+ * 1080p30 at 16 Mbit/s (~120 MB a minute), on the widest lens the phone has.
+ * 30, not 25: phones offer fixed 30 fps modes, and a Pixel 8a has no 25 fps
+ * one (measured 8 Nov 2026). The pipeline reads the rate from the file.
+ */
+export const RECORD_SETTINGS = { width: 1920, height: 1080, fps: 30, bitRate: 16_000_000,
+                                 widest: true };
 
 export type RecordingPhase = 'idle' | 'recording' | 'finishing' | 'completed' | 'failed';
 
@@ -299,6 +305,37 @@ class MatchRecording {
       this.set({ error: e instanceof Error ? e.message : 'Completing the match failed; retrying.' });
       setTimeout(() => void this.pump(), 30_000);
     }
+  }
+
+  /**
+   * Give up on this recording: the server is told (`abandon`), and the
+   * segments still on the phone are deleted. Only on an operator's explicit
+   * choice -- this is the one path that deletes footage the server has not
+   * confirmed.
+   */
+  async discard(): Promise<void> {
+    const { sessionId, chunks } = this.state;
+    if (this.state.phase === 'recording') {
+      await getRiseupRecorder()?.stop();
+    }
+    if (sessionId !== null && this.api !== null) {
+      await abandonSession(this.api, sessionId, 'operator_cancelled').catch(() => undefined);
+    }
+    for (const chunk of chunks) {
+      try {
+        new File(chunk.uri).delete();
+      } catch {
+        // Already gone.
+      }
+    }
+    if (sessionId !== null) {
+      try {
+        new Directory(Paths.document, 'recordings', sessionId).delete();
+      } catch {
+        // Already gone.
+      }
+    }
+    this.set(EMPTY);
   }
 
   /** Clear a finished or failed recording from the screen. Files stay until confirmed. */

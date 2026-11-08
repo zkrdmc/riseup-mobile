@@ -122,6 +122,14 @@ export default function RecordScreen() {
             <BodyStrong size={13}>{error ?? lastError}</BodyStrong>
           </>
         ) : null}
+        {state.phase === 'finishing' || state.phase === 'failed' ? (
+          <>
+            <Spacer size={space[3]} />
+            <Button label="Discard this recording" variant="secondary" onPress={() => {
+              void matchRecording.discard();
+            }} />
+          </>
+        ) : null}
         {state.phase === 'completed' ? (
           <>
             <Spacer size={space[3]} />
