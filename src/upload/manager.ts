@@ -18,29 +18,23 @@
  *     rejects a second concurrent job per club with a 409, so parallel
  *     uploads would produce failures that look like network errors.
  *
- * WHAT IS NOT TRUE YET, AND MUST BE SAID PLAINLY
- * ----------------------------------------------
- * RESUME RESTARTS THE FILE. A presigned PUT to R2 is a single request; there
- * is no byte range to resume from. An upload interrupted at 90% of an 18 GB
- * match restarts at zero.
+ *   - A MATCH RESUMES WHERE IT STOPPED. Anything over one part (64 MiB) goes
+ *     up in parts (`multipart.ts`); every part that lands is in the entry's
+ *     ledger, persisted. A dropped connection costs one part; a kill, a
+ *     reboot or a tap on retry carries on from the ledger, checked against
+ *     what the store actually holds (`uploads/unfinished`). There is no
+ *     5 GiB ceiling. The server keeps a paused upload's parts for 23 h.
+ *   - A heartbeat (`upload-progress`) every minute while bytes move keeps the
+ *     GPU pod booked and the upload open on the server.
  *
- * That is acceptable for a 200 MB clip on club Wi-Fi, which is all v0.1
- * uploads. It is NOT acceptable for a match, and §5's "a 36 GB pair over club
- * Wi-Fi is an overnight job" is precisely the case where it fails: an
- * overnight transfer that has to complete in one unbroken run will not.
- *
- * The fix is multipart upload — `POST /videos/upload-url` returning an upload
- * id and per-part URLs, and a completion call that assembles them. It is
- * listed in `docs/BACKEND-GAPS.md` as the blocking item for v0.2, and this
- * module's shape (a queue of entries, each with a `uploadedBytes` cursor) is
- * built so that lands as a change to `runTransfer` and nothing else.
- *
- * ALSO NOT TRUE YET: a JS task is not restored after app termination, so a
- * transfer that the OS continues in the background while the app is dead
- * finishes without this module seeing its result. On the next launch the entry
- * is still `uploading`; it is re-driven from the start rather than assumed
- * complete, because assuming would mean confirming an upload that may not have
- * landed — and §5 is unambiguous that deletion may only follow verification.
+ * WHAT IS STILL NOT TRUE
+ * ----------------------
+ * A JS task is not restored after app termination, so a part the OS finishes
+ * in the background while the app is dead is not seen here. On the next
+ * launch the store is asked which parts it holds, so nothing is confirmed
+ * that did not land and nothing that did land is sent twice. A file under one
+ * part still goes as a single PUT and restarts on a kill, which costs at most
+ * 64 MiB.
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -50,7 +44,27 @@ import * as Crypto from 'expo-crypto';
 import type { ApiClient } from '../api/client';
 import { ApiError } from '../api/errors';
 import { paths } from '../api/endpoints';
-import type { UploadUrlResponse } from '../api/types';
+import type {
+  MultipartUploadUrlResponse,
+  PartUrl,
+  SingleUploadUrlResponse,
+  UnfinishedUpload,
+  UploadPartsResponse,
+  UploadUrlResponse,
+} from '../api/types';
+import {
+  HEARTBEAT_MS,
+  PART_ATTEMPTS,
+  PART_CONCURRENCY,
+  PartRejected,
+  backoffMs,
+  copyPart,
+  fingerprintOf,
+  ledgerBytes,
+  missingParts,
+  putPart,
+  type MultipartState,
+} from './multipart';
 
 export type UploadStatus =
   | 'queued'
@@ -114,9 +128,18 @@ export interface UploadEntry {
    * whether to transfer, retry, or confirm.
    */
   trainingConsent: boolean | undefined;
+  /**
+   * Set once the server chose parts. Persisted with every landed part, so a
+   * kill or a retry carries on instead of starting over.
+   */
+  multipart?: MultipartState;
+  /** The file's modification time, part of its fingerprint. */
+  modifiedMs?: number | null;
 }
 
 type Listener = () => void;
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 const STORAGE_KEY = 'riseup.uploadQueue.v1';
 
@@ -174,11 +197,16 @@ class UploadManager {
         return;
       }
       const stored = JSON.parse(raw) as UploadEntry[];
-      // Anything caught mid-transfer by a kill is re-queued, not resumed and
-      // not assumed done. See the note at the top of this file.
+      // Anything caught mid-transfer by a kill is re-queued, never assumed
+      // done. A multipart entry keeps its ledger and resumes from it; a
+      // single PUT starts over. See the note at the top of this file.
       this.entries = stored.map((entry) =>
         entry.status === 'uploading' || entry.status === 'confirming'
-          ? { ...entry, status: 'queued', uploadedBytes: 0 }
+          ? {
+              ...entry,
+              status: 'queued',
+              uploadedBytes: entry.multipart ? entry.uploadedBytes : 0,
+            }
           : entry,
       );
     } catch {
@@ -205,6 +233,8 @@ class UploadManager {
     totalBytes: number;
     coversOpening?: boolean;
     trainingConsent?: boolean;
+    /** From the picker when it says; part of the resume fingerprint. */
+    modifiedMs?: number | null;
   }): string {
     const entry: UploadEntry = {
       id: Crypto.randomUUID(),
@@ -223,6 +253,7 @@ class UploadManager {
       // NOT defaulted. `?? false` here would turn "never asked" into a
       // recorded refusal for every entry queued by a client that does not ask.
       trainingConsent: input.trainingConsent,
+      modifiedMs: input.modifiedMs ?? null,
     };
     this.entries = [entry, ...this.entries];
     this.emit();
@@ -242,7 +273,13 @@ class UploadManager {
   }
 
   retry(id: string): void {
-    this.update(id, { status: 'queued', error: null, uploadedBytes: 0 });
+    const entry = this.entries.find((e) => e.id === id);
+    // A multipart entry keeps what landed; only a single PUT starts over.
+    this.update(id, {
+      status: 'queued',
+      error: null,
+      uploadedBytes: entry?.multipart ? entry.uploadedBytes : 0,
+    });
     void this.drain();
   }
 
@@ -311,12 +348,28 @@ class UploadManager {
     this.update(id, { status: 'uploading', error: null });
     const startedAt = Date.now();
 
+    // A multipart upload this entry already started: carry on from it.
+    if (entry.multipart && entry.jobId) {
+      await this.runMultipart(id, file, entry.jobId, null);
+      return;
+    }
+
     try {
+      const totalBytes = entry.totalBytes > 0 ? entry.totalBytes : (file.size ?? 0);
+      const fingerprint = await fingerprintOf({
+        filename: entry.filename,
+        totalBytes,
+        modifiedMs: entry.modifiedMs ?? file.modificationTime ?? null,
+      });
       const presigned = await api.post<UploadUrlResponse>(
         paths.uploadUrl,
         {
           filename: entry.filename,
           content_type: entry.mimeType,
+          // THE SIZE IS WHAT BUYS PARTS. Without it the server can only offer
+          // one PUT, which is capped at ~5 GiB and restarts from zero.
+          size_bytes: totalBytes,
+          fingerprint,
           // Travels with the job at MINT time, not at confirm: the flag has to
           // be on the record before extraction is enqueued, or the pipeline
           // reads a job that does not yet know what it is missing.
@@ -333,6 +386,40 @@ class UploadManager {
 
       this.update(id, { jobId: presigned.job_id });
 
+      if (presigned.mode === 'multipart') {
+        this.update(id, {
+          totalBytes,
+          multipart: {
+            uploadId: presigned.upload_id,
+            partBytes: presigned.part_bytes,
+            partCount: presigned.part_count,
+            parts: {},
+            fingerprint,
+          },
+        });
+        await this.runMultipart(id, file, presigned.job_id, presigned);
+        return;
+      }
+
+      await this.runSingle(id, file, presigned, startedAt);
+    } catch (error) {
+      this.fail(id, error);
+    }
+  }
+
+  /** One PUT of the whole file: small files only (under one part). */
+  private async runSingle(
+    id: string,
+    file: File,
+    presigned: SingleUploadUrlResponse,
+    startedAt: number,
+  ): Promise<void> {
+    const api = this.api;
+    const entry = this.entries.find((e) => e.id === id);
+    if (api === null || entry === undefined) {
+      return;
+    }
+    try {
       const task = new UploadTask(file, presigned.upload_url, {
         httpMethod: presigned.method === 'PUT' ? 'PUT' : 'POST',
         // BINARY_CONTENT, not MULTIPART: a presigned PUT signs the raw body,
@@ -377,23 +464,220 @@ class UploadManager {
       this.update(id, { status: 'uploaded' });
     } catch (error) {
       this.activeTask = null;
+      this.fail(id, error);
+    }
+  }
 
-      if (error instanceof ApiError && error.code === 'conflict') {
-        // Another job is already running for this club. Not a failure — put it
-        // back in the queue and let the drain loop pick it up after the other
-        // one finishes.
-        this.update(id, { status: 'queued', error: null });
+  /**
+   * Every missing part, then the confirm. `fresh` is the mint's response
+   * (part URLs included); null means a resume, which first asks the store
+   * which parts it holds.
+   */
+  private async runMultipart(
+    id: string,
+    file: File,
+    jobId: string,
+    fresh: MultipartUploadUrlResponse | null,
+  ): Promise<void> {
+    const api = this.api;
+    if (api === null) {
+      return;
+    }
+    const startedAt = Date.now();
+    const heartbeat = setInterval(() => {
+      const now = this.entries.find((e) => e.id === id);
+      void api
+        .post(paths.uploadProgress(jobId), { bytes_sent: now?.uploadedBytes ?? 0 })
+        .catch(() => undefined);
+    }, HEARTBEAT_MS);
+    try {
+      const state = () => this.entries.find((e) => e.id === id)?.multipart;
+      if (state() === undefined) {
         return;
       }
 
-      this.update(id, {
-        status: 'failed',
-        error:
-          error instanceof ApiError
-            ? error.message
-            : 'The upload stopped. It will retry when you tap retry.',
+      const total = () => this.entries.find((e) => e.id === id)?.totalBytes ?? 0;
+
+      // ── Resume: the store's list wins over the ledger ──────────────────
+      const urls = new Map<number, string>();
+      if (fresh !== null) {
+        for (const part of fresh.parts) {
+          urls.set(part.part_number, part.url);
+        }
+      } else {
+        const s = state()!;
+        const listed = await api.get<{ uploads: UnfinishedUpload[] }>(paths.uploadsUnfinished, {
+          query: { fingerprint: s.fingerprint },
+          // What the store holds NOW; a cached list could hide a part.
+          noCache: true,
+        });
+        const mine = listed.uploads.find((u) => u.job_id === jobId);
+        if (mine === undefined) {
+          // Not open any more. Either an earlier run confirmed it and was
+          // killed before recording that -- then the job is past
+          // `awaiting_upload` and nothing must be sent again -- or the
+          // server discarded it after a day, and it starts over cleanly.
+          const status = await api
+            .get<{ state?: string; stage?: string }>(paths.job(jobId), { noCache: true })
+            .catch(() => null);
+          if (status !== null && status.state !== 'failed'
+              && status.stage !== 'awaiting_upload') {
+            this.update(id, { status: 'uploaded', uploadedBytes: total() });
+            return;
+          }
+          this.update(id, { multipart: undefined, jobId: null, uploadedBytes: 0,
+                            idempotencyKey: Crypto.randomUUID() });
+          this.update(id, { status: 'queued' });
+          return;
+        }
+        const parts: Record<number, string> = {};
+        for (const p of mine.parts_done) {
+          parts[p.part_number] = p.etag;
+        }
+        this.setLedger(id, parts);
+      }
+
+      // ── Send what is missing, PART_CONCURRENCY at a time ───────────────
+      let todo = missingParts(state()!.partCount, state()!.parts);
+      if (todo.length > 0) {
+        const needUrls = todo.filter((n) => !urls.has(n));
+        if (needUrls.length > 0) {
+          for (const part of await this.freshUrls(jobId, needUrls)) {
+            urls.set(part.part_number, part.url);
+          }
+        }
+      }
+      const inFlight = new Map<number, number>();
+      const progress = () => {
+        let sent = ledgerBytes(state()!, total());
+        for (const bytes of inFlight.values()) {
+          sent += bytes;
+        }
+        this.update(id, { uploadedBytes: sent, elapsedMs: Date.now() - startedAt });
+      };
+
+      const sendOne = async (n: number): Promise<void> => {
+        for (let attempt = 1; ; attempt += 1) {
+          const current = this.entries.find((e) => e.id === id);
+          if (current === undefined || current.status === 'cancelled') {
+            return;
+          }
+          const s = state()!;
+          let temp: File | null = null;
+          try {
+            temp = copyPart(file, n, s.partBytes, total());
+            const etag = await putPart(temp, urls.get(n)!, n, (sent) => {
+              inFlight.set(n, sent);
+              progress();
+            });
+            inFlight.delete(n);
+            this.setLedger(id, { ...state()!.parts, [n]: etag });
+            progress();
+            return;
+          } catch (error) {
+            inFlight.delete(n);
+            if (attempt >= PART_ATTEMPTS) {
+              throw error;
+            }
+            if (error instanceof PartRejected && error.status === 403) {
+              // An expired URL: R2 says 403. Ask for a fresh one.
+              const [part] = await this.freshUrls(jobId, [n]);
+              if (part !== undefined) {
+                urls.set(n, part.url);
+              }
+            }
+            await sleep(backoffMs(attempt));
+          } finally {
+            temp?.delete();
+          }
+        }
+      };
+
+      const queue = [...todo];
+      const workers = Array.from({ length: Math.min(PART_CONCURRENCY, queue.length) }, async () => {
+        for (let n = queue.shift(); n !== undefined; n = queue.shift()) {
+          await sendOne(n);
+        }
       });
+      await Promise.all(workers);
+
+      const after = this.entries.find((e) => e.id === id);
+      if (after === undefined || after.status === 'cancelled') {
+        return;
+      }
+      todo = missingParts(state()!.partCount, state()!.parts);
+      if (todo.length > 0) {
+        throw new Error(`${todo.length} part(s) did not land`);
+      }
+
+      // ── Confirm: the store assembles the parts named here ──────────────
+      this.update(id, { status: 'confirming', uploadedBytes: total() });
+      const parts = Object.entries(state()!.parts)
+        .map(([n, etag]) => ({ part_number: Number(n), etag }))
+        .sort((a, b) => a.part_number - b.part_number);
+      await api.post(paths.uploadConfirm(jobId), { parts }, {
+        idempotencyKey: `${this.entries.find((e) => e.id === id)?.idempotencyKey}:confirm`,
+        // Assembly of a few hundred parts plus a HEAD: more than 15 s.
+        timeoutMs: 120_000,
+      });
+      this.update(id, { status: 'uploaded' });
+    } catch (error) {
+      // PAUSED, NOT LOST. The server is told so it frees the club's slot and
+      // the pod; it keeps the parts, and so does the ledger. Retry resumes.
+      void api
+        .post(paths.uploadFailed(jobId), {
+          reason: error instanceof Error ? error.message.slice(0, 200) : 'stopped',
+          stage: 'parts',
+          progress: this.fraction(id),
+        })
+        .catch(() => undefined);
+      this.fail(id, error, 'The upload paused. Tap retry to carry on where it stopped.');
+    } finally {
+      clearInterval(heartbeat);
     }
+  }
+
+  private async freshUrls(jobId: string, numbers: number[]): Promise<PartUrl[]> {
+    const api = this.api!;
+    const out: PartUrl[] = [];
+    // The server takes up to 10,000 at once; batches keep each reply small.
+    for (let i = 0; i < numbers.length; i += 500) {
+      const reply = await api.post<UploadPartsResponse>(paths.uploadParts(jobId), {
+        part_numbers: numbers.slice(i, i + 500),
+      });
+      out.push(...reply.parts);
+    }
+    return out;
+  }
+
+  private setLedger(id: string, parts: Record<number, string>): void {
+    const entry = this.entries.find((e) => e.id === id);
+    if (entry?.multipart === undefined) {
+      return;
+    }
+    this.update(id, { multipart: { ...entry.multipart, parts } });
+  }
+
+  private fraction(id: string): number {
+    const entry = this.entries.find((e) => e.id === id);
+    return entry && entry.totalBytes > 0 ? entry.uploadedBytes / entry.totalBytes : 0;
+  }
+
+  private fail(id: string, error: unknown, fallback?: string): void {
+    if (error instanceof ApiError && error.code === 'conflict') {
+      // Another job is already running for this club. Not a failure — put it
+      // back in the queue and let the drain loop pick it up after the other
+      // one finishes.
+      this.update(id, { status: 'queued', error: null });
+      return;
+    }
+    this.update(id, {
+      status: 'failed',
+      error:
+        error instanceof ApiError
+          ? error.message
+          : (fallback ?? 'The upload stopped. It will retry when you tap retry.'),
+    });
   }
 }
 

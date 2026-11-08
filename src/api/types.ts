@@ -183,8 +183,16 @@ export interface UploadMode {
 }
 
 /** POST /api/v1/videos/upload-url */
-export interface UploadUrlResponse {
+/**
+ * POST /api/v1/videos/upload-url. `mode` says which: a file whose size is
+ * sent and is over one part (64 MiB) gets parts; anything else one PUT.
+ */
+export type UploadUrlResponse = SingleUploadUrlResponse | MultipartUploadUrlResponse;
+
+export interface SingleUploadUrlResponse {
   job_id: string;
+  /** Absent from servers older than multipart: read as 'single'. */
+  mode?: 'single';
   upload_url: string;
   method: string;
   headers: Record<string, string>;
@@ -192,6 +200,43 @@ export interface UploadUrlResponse {
   object_key: string;
   /** Relative path to call once the PUT returns 200. */
   next: string;
+}
+
+export interface PartUrl {
+  part_number: number;
+  url: string;
+}
+
+export interface MultipartUploadUrlResponse {
+  job_id: string;
+  mode: 'multipart';
+  upload_id: string;
+  part_bytes: number;
+  part_count: number;
+  parts: PartUrl[];
+  expires_in: number;
+  object_key: string;
+  refresh: string;
+  next: string;
+}
+
+/** POST /api/v1/videos/{job_id}/upload-parts */
+export interface UploadPartsResponse {
+  job_id: string;
+  parts: PartUrl[];
+  expires_in: number;
+}
+
+/** GET /api/v1/videos/uploads/unfinished?fingerprint= */
+export interface UnfinishedUpload {
+  job_id: string;
+  match_id: string | null;
+  filename: string | null;
+  file_size_bytes: number;
+  part_bytes: number;
+  part_count: number;
+  parts_done: { part_number: number; etag: string; size: number }[];
+  created_at: string | null;
 }
 
 /** POST /api/v1/videos/upload — the direct multipart path. */
