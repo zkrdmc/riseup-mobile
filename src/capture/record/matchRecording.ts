@@ -36,6 +36,7 @@ import {
   type RecorderSegment,
 } from '../../../modules/riseup-recorder';
 import type { ApiClient } from '../../api/client';
+import { ApiError } from '../../api/errors';
 import { paths } from '../../api/endpoints';
 import type { ChunkManifest } from '../upload/chunkManifest';
 import {
@@ -325,10 +326,16 @@ class MatchRecording {
     if (next === 'background' && this.state.phase === 'recording') {
       this.pause('background');
     } else if (next === 'active') {
-      if (this.state.phase === 'paused' && this.state.pauseReason === 'background') {
-        this.resume();
-      }
-      void this.reconcile().then(() => this.pump());
+      // ASK THE SERVER FIRST. If it closed the match while this phone was in
+      // a pocket (both cameras paused past the window), resuming would record
+      // into a closed session: every register 409s and the disk fills.
+      void this.reconcile().then((closed) => {
+        if (!closed && this.state.phase === 'paused'
+            && this.state.pauseReason === 'background') {
+          this.resume();
+        }
+        void this.pump();
+      });
     }
   }
 
@@ -377,6 +384,11 @@ class MatchRecording {
       return;
     }
     if (answer === 'over') {
+      // Say "paused" first. After a crash, or a background pause that never
+      // reached the server, it still thinks this camera is recording, and a
+      // complete without a final chunk is NOT_FINALISED forever. With every
+      // camera paused, the last verified chunk is the end (server rule).
+      await this.tellServer('pause', 'operator');
       this.set({ phase: 'finishing', endedAt: new Date().toISOString() });
       void this.pump();
       return;
@@ -398,6 +410,26 @@ class MatchRecording {
     }
     recorder.addListener('onSegment', (segment: RecorderSegment) => this.onSegment(segment));
     recorder.addListener('onError', (error) => this.set({ error: error.message }));
+    // THE RECORDER PAUSES ITSELF when the OS takes the camera (another app, a
+    // call: `camera_lost`). Without these the screen kept saying "recording"
+    // and the server was never told. A pause JS asked for arrives here too,
+    // after `pause()` already moved the phase, and is then a no-op.
+    recorder.addListener('onPaused', ({ reason }) => {
+      if (this.state.phase !== 'recording') {
+        return;
+      }
+      this.set({ phase: 'paused', pauseReason: reason });
+      void recordingNotices.paused(this.state.role, reason);
+      void this.tellServer('pause', reason);
+    });
+    recorder.addListener('onResumed', () => {
+      if (this.state.phase !== 'paused') {
+        return;
+      }
+      this.set({ phase: 'recording', pauseReason: null });
+      void recordingNotices.resumed(this.state.role);
+      void this.tellServer('resume');
+    });
   }
 
   private lastChunk(): QueuedChunk | null {
@@ -445,7 +477,8 @@ class MatchRecording {
     try {
       for (;;) {
         const sessionId = this.state.sessionId;
-        if (sessionId === null) {
+        // Closed: nothing more can be registered against it.
+        if (sessionId === null || this.state.phase === 'completed') {
           return;
         }
         const next = nextChunkToSend(this.state.chunks, Date.now());
@@ -481,6 +514,10 @@ class MatchRecording {
         error: e instanceof Error ? e.message : 'registering the chunk failed',
         nextAttemptAt: Date.now() + backoffMs(attempts),
       });
+      if (e instanceof ApiError && e.status === 409) {
+        // The session may have been closed under us: find out, and stop.
+        void this.reconcile();
+      }
     }
   }
 
@@ -577,16 +614,16 @@ class MatchRecording {
    * match it completed after halftime. Run on attach and on every return to
    * the foreground.
    */
-  private async reconcile(): Promise<void> {
+  private async reconcile(): Promise<boolean> {
     const { sessionId, role } = this.state;
     if (this.api === null || sessionId === null) {
-      return;
+      return false;
     }
     let server: ServerSession;
     try {
       server = await this.api.get<ServerSession>(paths.captureSession(sessionId), { noCache: true });
     } catch {
-      return;
+      return false;
     }
     const mine = server.cameras?.find((c) => c.role === role);
     for (const chunk of this.state.chunks) {
@@ -595,10 +632,23 @@ class MatchRecording {
         this.confirmed(sessionId, chunk);
       }
     }
-    if (server.autoCompleted && this.state.phase !== 'completed') {
-      this.set({ phase: 'completed', jobId: server.jobId ?? null, error: null });
-      void recordingNotices.sent();
+    // CLOSED, by whoever: the server (half-time window, final chunks) or the
+    // other phone of the pair, whose complete came first. Not only
+    // `autoCompleted` -- the pair's second phone otherwise retried its own
+    // complete against "already completed" every 30 s, forever.
+    if (server.status === 'complete' || server.autoCompleted) {
+      if (this.state.phase !== 'completed') {
+        this.motion?.stop();
+        this.motion = null;
+        if (this.state.phase === 'recording' || this.state.phase === 'paused') {
+          await getRiseupRecorder()?.stop();
+        }
+        this.set({ phase: 'completed', jobId: server.jobId ?? null, error: null });
+        void recordingNotices.sent();
+      }
+      return true;
     }
+    return false;
   }
 
   private patchChunk(sequence: number, patch: Partial<QueuedChunk>): void {
@@ -629,6 +679,28 @@ class MatchRecording {
         this.set({ phase: 'failed', error: problems.join(' ') || 'The match could not be assembled.' });
       }
     } catch (e) {
+      if (e instanceof ApiError && e.status === 409) {
+        // "Already completed": the other phone or the server got there first.
+        if (await this.reconcile()) {
+          return;
+        }
+        // The server's named problems come back as a 409, so this is where
+        // they are read. This phone's own footage is all confirmed by now, so
+        // a problem with it is final; the OTHER camera's is still sending.
+        const problems = completeProblems(e.detail);
+        if (problems !== null) {
+          const mine = problems.filter((p) => p.role === undefined || p.role === this.state.role);
+          if (mine.length > 0) {
+            this.set({ phase: 'failed',
+                       error: mine.map((p) => p.message).join(' ') || 'The match could not be assembled.' });
+            return;
+          }
+          const others = [...new Set(problems.map((p) => p.role))].join(', ');
+          this.set({ error: `Waiting for camera ${others} to finish sending.` });
+          setTimeout(() => void this.pump(), 60_000);
+          return;
+        }
+      }
       this.set({ error: e instanceof Error ? e.message : 'Completing the match failed; retrying.' });
       setTimeout(() => void this.pump(), 30_000);
     }
@@ -694,6 +766,17 @@ function uploadId(sessionId: string, chunk: QueuedChunk): string {
 
 function appVersion(): string {
   return Application.nativeApplicationVersion ?? 'dev';
+}
+
+/** The problems a refused `complete` names (409 `{reassemblable, problems}`), or null. */
+function completeProblems(
+  detail: unknown,
+): Array<{ code: string; role?: string; message: string }> | null {
+  if (typeof detail !== 'object' || detail === null || !('problems' in detail)) {
+    return null;
+  }
+  const problems = (detail as { problems: unknown }).problems;
+  return Array.isArray(problems) ? problems : null;
 }
 
 export const matchRecording = new MatchRecording();
