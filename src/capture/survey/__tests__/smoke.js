@@ -21,6 +21,7 @@ const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
 const marker = require('../../../../.smoke/capture/sync/marker');
+const plan = require('../../../../.smoke/upload/multipartPlan');
 const rq = require('../../../../.smoke/capture/record/recordingQueue');
 const mr = require('../../../../.smoke/capture/record/motionRule');
 const pr = require('../../../../.smoke/capture/record/pairing');
@@ -1384,6 +1385,30 @@ console.log('26. A call that never answers must not spin forever');
         pr.joinOffsetNs('2026-11-09T10:00:00.000Z', Date.parse('2026-11-09T10:01:30.000Z')) === 90e9);
   check('retry backoff starts at 2 s and stops at 60 s',
         rq.backoffMs(1) === 2000 && rq.backoffMs(2) === 4000 && rq.backoffMs(20) === 60000);
+}
+
+/* ── Multipart upload arithmetic (src/upload/multipartPlan.ts) ─────────── */
+{
+  const MiB = 1024 * 1024;
+  const total = 150 * MiB + 7;              // three parts, the last short
+  const pb = 64 * MiB;
+  const r1 = plan.partRange(1, pb, total);
+  const r3 = plan.partRange(3, pb, total);
+  check('part 1 starts at 0 and is a full part', r1.start === 0 && r1.length === pb);
+  check('the last part is what is left', r3.start === 2 * pb && r3.length === 22 * MiB + 7);
+  check('a part past the end is empty', plan.partRange(4, pb, total).length === 0);
+  check('the parts cover the file exactly',
+        [1, 2, 3].reduce((n, i) => n + plan.partRange(i, pb, total).length, 0) === total);
+  check('missing parts are the ones not in the ledger',
+        JSON.stringify(plan.missingParts(5, { 1: '"a"', 3: '"c"' })) === '[2,4,5]');
+  const st = { uploadId: 'u', partBytes: pb, partCount: 3, parts: { 1: '"a"', 3: '"c"' }, fingerprint: 'f' };
+  check('the ledger counts the short last part at its real size',
+        plan.ledgerBytes(st, total) === pb + 22 * MiB + 7);
+  check('an ETag is found whatever case the platform gave the header',
+        plan.etagOf({ ETag: '"x"' }) === '"x"' && plan.etagOf({ etag: '"y"' }) === '"y"');
+  check('no ETag is null, not an empty string', plan.etagOf({ 'content-length': '0' }) === null);
+  check('backoff doubles from 1 s and stops at 30 s',
+        plan.backoffMs(1) === 1000 && plan.backoffMs(3) === 4000 && plan.backoffMs(10) === 30000);
 }
 
 Promise.all(pending).then(() => {

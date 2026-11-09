@@ -53,6 +53,14 @@ export const paths = {
    * PRD §8.1 calls this `POST /videos/confirm`. It is not.
    */
   uploadConfirm: (jobId: string) => `${V1}/videos/${jobId}/uploaded`,
+  /** Fresh URLs for a multipart upload's parts; also reopens a paused one. */
+  uploadParts: (jobId: string) => `${V1}/videos/${jobId}/upload-parts`,
+  /** Heartbeat while bytes move: keeps the pod booked and the upload open. */
+  uploadProgress: (jobId: string) => `${V1}/videos/${jobId}/upload-progress`,
+  /** The client gave up; the server keeps a multipart upload's parts. */
+  uploadFailed: (jobId: string) => `${V1}/videos/${jobId}/upload-failed`,
+  /** This club's unfinished multipart uploads of one file (by fingerprint). */
+  uploadsUnfinished: `${V1}/videos/uploads/unfinished`,
   /** PRD §8.1 calls this `GET /videos/jobs`. It is not. */
   jobs: `${V1}/videos`,
   /** PRD §8.1 calls this `GET /videos/jobs/{id}`. It is not. */
