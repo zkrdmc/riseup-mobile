@@ -105,6 +105,10 @@ export interface SessionState {
 export interface CompleteResult {
   reassemblable: boolean;
   jobId: string | null;
+  /** Null: sent to the pipeline now. N: waiting N-th behind the club's
+   *  running match; the server sends it on its own (max 3 waiting; a 4th
+   *  is a 409 and the session stays open). */
+  queuedBehind?: number | null;
   problems: Array<{ code: string; role?: string; sequences?: number[]; message: string }>;
 }
 

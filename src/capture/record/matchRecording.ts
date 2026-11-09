@@ -623,7 +623,7 @@ class MatchRecording {
         { endedAt: endedAt ?? new Date().toISOString() });
       if (remote?.reassemblable) {
         this.set({ phase: 'completed', jobId: remote.jobId, error: null });
-        void recordingNotices.sent();
+        void recordingNotices.sent(remote.queuedBehind ?? null);
       } else {
         const problems = remote?.problems.map((p) => p.message) ?? local.problems.map((p) => p.message);
         this.set({ phase: 'failed', error: problems.join(' ') || 'The match could not be assembled.' });

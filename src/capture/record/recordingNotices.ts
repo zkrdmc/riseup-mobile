@@ -80,8 +80,15 @@ export const recordingNotices = {
     notify(`Camera ${camera} recording`, 'Recording again. The paused minutes are marked as missing.', 'state'),
   stopped: (camera: string) =>
     notify(`Camera ${camera} stopped`, 'Recording stopped. The last minutes are being sent.', 'state'),
-  sent: () =>
-    notify('Match sent', 'Every minute is in. The analysis has started.', 'state'),
+  /** `queuedBehind`: the server's place in the club's queue (null = started). */
+  sent: (queuedBehind: number | null = null) =>
+    notify('Match sent',
+           !queuedBehind
+             ? 'Every minute is in. The analysis has started.'
+             : queuedBehind === 1
+               ? 'Every minute is in. It starts when the match being analysed now finishes.'
+               : `Every minute is in. It is number ${queuedBehind} in line behind the match being analysed now.`,
+           'state'),
   behind: (minutes: number) =>
     notify('Upload falling behind',
            `${minutes} min of video still to send. Quality steps down to keep up; it keeps sending in the background.`,
