@@ -229,6 +229,24 @@ export async function completeSession(
   return { local, remote };
 }
 
+export interface JoinSessionResult extends OpenSessionResult {
+  /** When phone A opened the session: phone B places its clock against it. */
+  startedAt: string;
+}
+
+/**
+ * The second phone of a casing rig joins phone A's session as camera B
+ * (pairing.ts). Same club only, open sessions only; the same device
+ * re-joining is idempotent, another device on a taken role is refused.
+ */
+export async function joinSession(
+  api: ApiClient,
+  sessionId: string,
+  camera: Omit<SessionCamera, 'clubCameraId' | 'lens'> & { role: 'B' },
+): Promise<JoinSessionResult> {
+  return api.post<JoinSessionResult>(`${paths.captureSession(sessionId)}/join`, camera);
+}
+
 export async function abandonSession(
   api: ApiClient,
   sessionId: string,

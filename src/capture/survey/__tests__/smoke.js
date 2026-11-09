@@ -23,6 +23,7 @@ const solve = require('../../../../.smoke/capture/calibration/solve');
 const marker = require('../../../../.smoke/capture/sync/marker');
 const rq = require('../../../../.smoke/capture/record/recordingQueue');
 const mr = require('../../../../.smoke/capture/record/motionRule');
+const pr = require('../../../../.smoke/capture/record/pairing');
 
 let pass = 0;
 let fail = 0;
@@ -1363,6 +1364,17 @@ console.log('26. A call that never answers must not spin forever');
   check('still for 5 s resumes', mr.motionVerdict(series(0, 5200, 0.1), 5200, 'moving') === 'still');
   check('half still keeps it paused',
         mr.motionVerdict([...series(0, 2500, 0.1), ...series(2600, 5200, 1.0)], 5200, 'moving') === 'moving');
+  // Pairing (QR on phone A, scanned by phone B).
+  const sid = 'ses_' + '0123456789abcdef'.repeat(2);
+  const parsed = pr.parseJoinCode(pr.joinCodeFor(sid));
+  check('a join code round-trips', parsed !== null && parsed.sessionId === sid && parsed.role === 'B');
+  check('any other QR is not a join code', pr.parseJoinCode('https://example.com/?session=' + sid) === null);
+  check('a malformed session id is refused',
+        pr.parseJoinCode('riseup://join?v=1&session=ses_nothex&role=B') === null);
+  check('an unknown code version is refused',
+        pr.parseJoinCode(pr.joinCodeFor(sid).replace('v=1', 'v=2')) === null);
+  check('phone B starts as far into the session as it joined',
+        pr.joinOffsetNs('2026-11-09T10:00:00.000Z', Date.parse('2026-11-09T10:01:30.000Z')) === 90e9);
   check('retry backoff starts at 2 s and stops at 60 s',
         rq.backoffMs(1) === 2000 && rq.backoffMs(2) === 4000 && rq.backoffMs(20) === 60000);
 }

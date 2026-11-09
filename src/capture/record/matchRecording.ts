@@ -42,9 +42,11 @@ import {
   abandonSession,
   completeSession,
   confirmChunk,
+  joinSession,
   openSession,
   registerChunk,
 } from '../upload/chunkedSession';
+import { joinOffsetNs, type JoinCode } from './pairing';
 import { startMotionWatch, type MotionWatch } from './motion';
 import {
   backlogSeconds,
@@ -201,9 +203,11 @@ class MatchRecording {
     }
     const deviceId = await this.deviceId();
     const startedAt = new Date().toISOString();
+    // Phone recordings are PAIRS in casings (Zak, 9 Nov 2026): the phone that
+    // starts the match is camera A; the second joins as B (pairing.ts).
     const session = await openSession(api, {
       cameras: [{
-        role: 'solo',
+        role: 'A',
         deviceId,
         clubCameraId: null,
         widthPx: RECORD_SETTINGS.width,
@@ -221,10 +225,47 @@ class MatchRecording {
       phase: 'recording',
       sessionId: session.sessionId,
       deviceId,
+      role: 'A',
       chunkTargetSeconds: session.chunkTargetSeconds,
       startedAt,
     });
     await this.startRecorder(0, 0);
+  }
+
+  /** Phone B: join phone A's match from its code, and start recording. */
+  async join(code: JoinCode): Promise<void> {
+    const api = this.api;
+    const recorder = getRiseupRecorder();
+    if (api === null || recorder === null) {
+      throw new Error('Recording needs the RiseUp build of the app (not Expo Go).');
+    }
+    if (this.state.phase !== 'idle' && this.state.phase !== 'completed'
+        && this.state.phase !== 'failed') {
+      throw new Error('This phone is already recording or sending a match.');
+    }
+    const permission = await recorder.requestPermission();
+    if (!permission.granted) {
+      throw new Error('RiseUp needs the camera to record the match.');
+    }
+    const deviceId = await this.deviceId();
+    const session = await joinSession(api, code.sessionId, {
+      role: 'B',
+      deviceId,
+      widthPx: RECORD_SETTINGS.width,
+      heightPx: RECORD_SETTINGS.height,
+      fps: RECORD_SETTINGS.fps,
+    });
+    this.set({
+      ...EMPTY,
+      phase: 'recording',
+      sessionId: session.sessionId,
+      deviceId,
+      role: 'B',
+      chunkTargetSeconds: session.chunkTargetSeconds,
+      startedAt: session.startedAt,
+    });
+    // B starts later than A: its zero sits that far into the session clock.
+    await this.startRecorder(0, joinOffsetNs(session.startedAt, Date.now()));
   }
 
   /** The recorder, from `sequenceStart` at `ptsOffsetNs` on the session clock. */

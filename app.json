@@ -73,7 +73,14 @@
         }
       ],
       "expo-apple-authentication",
-      "expo-localization"
+      "expo-localization",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "RiseUp uses the camera to film matches and to scan the code that pairs the second phone.",
+          "recordAudioAndroid": false
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true

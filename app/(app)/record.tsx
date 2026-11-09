@@ -16,6 +16,8 @@ import { StyleSheet, Switch, View } from 'react-native';
 import { getRecorderPreview, isRiseupRecorderAvailable } from '../../modules/riseup-recorder';
 import { useApi } from '../../src/api/provider';
 import { matchRecording } from '../../src/capture/record/matchRecording';
+import { joinCodeFor } from '../../src/capture/record/pairing';
+import { QrCode } from '../../src/ui/QrCode';
 import { ladderFor } from '../../src/capture/record/recordingQueue';
 import { space, surface } from '../../src/theme/tokens';
 import { Button } from '../../src/ui/Button';
@@ -30,6 +32,7 @@ export default function RecordScreen() {
   const [coversOpening, setCoversOpening] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCode, setShowCode] = useState(false);
   const Preview = getRecorderPreview();
 
   useEffect(() => {
@@ -104,11 +107,31 @@ export default function RecordScreen() {
               <Switch value={coversOpening} onValueChange={setCoversOpening} />
             </Row>
             <Spacer size={space[3]} />
-            <Button label="Start recording" onPress={start} busy={busy} block />
+            <Button label="Start recording (camera A)" onPress={start} busy={busy} block />
+            <Spacer size={space[2]} />
+            <Button label="Join as the second camera" variant="secondary"
+                    onPress={() => router.push('/record-join')} block />
           </>
         ) : null}
         {state.phase === 'recording' ? (
-          <Button label="Stop at the final whistle" onPress={stop} busy={busy} block variant="secondary" />
+          <>
+            {state.role === 'A' && state.sessionId !== null ? (
+              showCode ? (
+                <View style={styles.code}>
+                  <QrCode value={joinCodeFor(state.sessionId)} size={220} />
+                  <Spacer size={space[2]} />
+                  <Body tone={2}>Scan this with the second phone (Join as the second camera).</Body>
+                  <Spacer size={space[2]} />
+                  <Button label="Hide the code" variant="secondary" onPress={() => setShowCode(false)} />
+                </View>
+              ) : (
+                <Button label="Pair the second phone" variant="secondary"
+                        onPress={() => setShowCode(true)} block />
+              )
+            ) : null}
+            <Spacer size={space[2]} />
+            <Button label="Stop at the final whistle" onPress={stop} busy={busy} block variant="secondary" />
+          </>
         ) : null}
         {state.phase === 'paused' ? (
           <>
@@ -180,6 +203,7 @@ export default function RecordScreen() {
 
 const styles = StyleSheet.create({
   flex: { flex: 1 },
+  code: { alignItems: 'center' },
   preview: {
     flex: 1,
     minHeight: 160,
