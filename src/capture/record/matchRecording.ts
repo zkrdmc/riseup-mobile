@@ -330,8 +330,11 @@ class MatchRecording {
       // a pocket (both cameras paused past the window), resuming would record
       // into a closed session: every register 409s and the disk fills.
       void this.reconcile().then((closed) => {
+        // `camera_lost` too: Android's camera disconnect can arrive before the
+        // AppState change, and a phone in its casing must not stay paused.
         if (!closed && this.state.phase === 'paused'
-            && this.state.pauseReason === 'background') {
+            && (this.state.pauseReason === 'background'
+                || this.state.pauseReason === 'camera_lost')) {
           this.resume();
         }
         void this.pump();
