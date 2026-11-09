@@ -88,6 +88,14 @@ export interface ChunkManifest {
    * forever for a chunk that is never coming.
    */
   final: boolean;
+
+  /**
+   * Time the recorder was knowingly NOT recording before this chunk: the phone
+   * was pulled from its casing (paused) or the app was killed and resumed.
+   * Declared, the server excuses it from coverage instead of calling it a
+   * hole (migration 041). Absent or 0 means "this chunk joins its predecessor".
+   */
+  gapBeforeMs?: number;
 }
 
 /** How far consecutive chunks may miss each other and still be called contiguous. */
@@ -126,7 +134,9 @@ export interface ChunkSetProblem {
     | 'TIME_OVERLAP'
     | 'NOT_FINALISED'
     | 'STARTED_IN_PLAY'
-    | 'MIXED_SESSION';
+    | 'MIXED_SESSION'
+    /** A pause the phone declared (`gapBeforeMs`): coverage drops, the match is whole. */
+    | 'DECLARED_GAP';
   message: string;
   /** The sequence numbers involved, for a support answer that names the chunk. */
   sequences: number[];
@@ -233,7 +243,17 @@ export function verifyChunkSet(chunks: ChunkManifest[]): ChunkSetReport {
       continue;
     }
     const delta = cur.startPtsNs - prev.endPtsNs;
-    if (delta > MAX_JOIN_GAP_NS) {
+    const declaredNs = (cur.gapBeforeMs ?? 0) * 1e6;
+    if (delta > MAX_JOIN_GAP_NS && delta <= declaredNs + MAX_JOIN_GAP_NS) {
+      // A pause the phone knew about and said so: not a hole, a declared gap.
+      caveats.push({
+        code: 'DECLARED_GAP',
+        message:
+          `${(delta / 1e9).toFixed(1)} s were not recorded between chunk ${prev.sequence} and ` +
+          `${cur.sequence} (the phone was paused). Coverage counts it as missing; the match is whole.`,
+        sequences: [prev.sequence, cur.sequence],
+      });
+    } else if (delta > MAX_JOIN_GAP_NS) {
       problems.push({
         code: 'TIME_GAP',
         message:

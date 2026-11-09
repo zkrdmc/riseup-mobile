@@ -105,6 +105,10 @@ export interface SessionState {
 export interface CompleteResult {
   reassemblable: boolean;
   jobId: string | null;
+  /** Null: sent to the pipeline now. N: waiting N-th behind the club's
+   *  running match; the server sends it on its own (max 3 waiting; a 4th
+   *  is a 409 and the session stays open). */
+  queuedBehind?: number | null;
   problems: Array<{ code: string; role?: string; sequences?: number[]; message: string }>;
 }
 
@@ -169,6 +173,7 @@ export async function registerChunk(
     deviceId: manifest.deviceId,
     recordedAt: manifest.recordedAt,
     final: manifest.final,
+    ...(manifest.gapBeforeMs ? { gapBeforeMs: manifest.gapBeforeMs } : {}),
   });
 }
 
@@ -226,6 +231,24 @@ export async function completeSession(
     sync: input.sync ?? { method: 'none', masterDeviceId: null, offsets: [] },
   });
   return { local, remote };
+}
+
+export interface JoinSessionResult extends OpenSessionResult {
+  /** When phone A opened the session: phone B places its clock against it. */
+  startedAt: string;
+}
+
+/**
+ * The second phone of a casing rig joins phone A's session as camera B
+ * (pairing.ts). Same club only, open sessions only; the same device
+ * re-joining is idempotent, another device on a taken role is refused.
+ */
+export async function joinSession(
+  api: ApiClient,
+  sessionId: string,
+  camera: Omit<SessionCamera, 'clubCameraId' | 'lens'> & { role: 'B' },
+): Promise<JoinSessionResult> {
+  return api.post<JoinSessionResult>(`${paths.captureSession(sessionId)}/join`, camera);
 }
 
 export async function abandonSession(

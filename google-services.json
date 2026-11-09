@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "118653083951",
+    "project_id": "riseup-football",
+    "storage_bucket": "riseup-football.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:118653083951:android:76ebfd632000162c5941da",
+        "android_client_info": {
+          "package_name": "co.riseupai.mobile"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB3-vdreSQcsbhZcR_o1ys4o63t8ziTTsw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

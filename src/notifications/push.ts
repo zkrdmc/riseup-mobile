@@ -28,7 +28,8 @@ import { Platform } from 'react-native';
 import type { ApiClient } from '../api/client';
 import { paths } from '../api/endpoints';
 import { inbox } from './inbox';
-import type { InboxItem } from './types';
+import { matchRecording } from '../capture/record/matchRecording';
+import { isOwnCameraNotice, type InboxItem } from './types';
 
 const TOKEN_KEY = 'riseup.pushToken';
 
@@ -47,12 +48,19 @@ export type PushState =
  * see "analysis complete" for the match they are waiting on.
  */
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async (notification) => {
+    // The server's copy of this phone's own pause/resume: already shown
+    // locally the moment it happened (recordingNotices.ts).
+    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const own = matchRecording.getSnapshot();
+    const show = !isOwnCameraNotice(data, { sessionId: own.sessionId, role: own.role });
+    return {
+      shouldShowBanner: show,
+      shouldShowList: show,
+      shouldPlaySound: false,
+      shouldSetBadge: show,
+    };
+  },
 });
 
 /**
@@ -155,6 +163,9 @@ async function resolvePushState(api: ApiClient): Promise<PushState> {
     const result = await Notifications.getExpoPushTokenAsync();
     token = result.data;
   } catch (error) {
+    // Said, not swallowed: "no token" has several causes (no Firebase config,
+    // no Google Play services, no network) and each has a different fix.
+    console.warn('[push] no Expo push token:', error instanceof Error ? error.message : String(error));
     return {
       status: 'unsupported',
       reason: 'Could not get a push token from the operating system.',
@@ -172,7 +183,8 @@ async function resolvePushState(api: ApiClient): Promise<PushState> {
       app_version: '0.1.0',
     });
     return { status: 'registered', token };
-  } catch {
+  } catch (error) {
+    console.warn('[push] device registration refused:', error instanceof Error ? error.message : String(error));
     // Expected today: the endpoint is not built. The token is kept and this
     // runs again on the next launch, so the endpoint shipping is enough.
     return {

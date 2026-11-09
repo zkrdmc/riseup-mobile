@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+  xmlns:tools="http://schemas.android.com/tools">
+  <uses-permission android:name="android.permission.CAMERA" />
+  <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+  <!-- Chunk uploads run as a WorkManager foreground service (ChunkUploadWorker):
+       Android 14 requires the service type and its permission to be declared. -->
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+  <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  <application>
+    <service
+      android:name="androidx.work.impl.foreground.SystemForegroundService"
+      android:foregroundServiceType="dataSync"
+      tools:node="merge" />
+  </application>
+</manifest>
