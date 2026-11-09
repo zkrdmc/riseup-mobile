@@ -33,7 +33,8 @@
       "permissions": [
         "android.permission.ACCESS_FINE_LOCATION"
       ],
-      "resizeableActivity": true
+      "resizeableActivity": true,
+      "googleServicesFile": "./google-services.json"
     },
     "plugins": [
       "expo-router",

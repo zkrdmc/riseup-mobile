@@ -163,6 +163,9 @@ async function resolvePushState(api: ApiClient): Promise<PushState> {
     const result = await Notifications.getExpoPushTokenAsync();
     token = result.data;
   } catch (error) {
+    // Said, not swallowed: "no token" has several causes (no Firebase config,
+    // no Google Play services, no network) and each has a different fix.
+    console.warn('[push] no Expo push token:', error instanceof Error ? error.message : String(error));
     return {
       status: 'unsupported',
       reason: 'Could not get a push token from the operating system.',
@@ -180,7 +183,8 @@ async function resolvePushState(api: ApiClient): Promise<PushState> {
       app_version: '0.1.0',
     });
     return { status: 'registered', token };
-  } catch {
+  } catch (error) {
+    console.warn('[push] device registration refused:', error instanceof Error ? error.message : String(error));
     // Expected today: the endpoint is not built. The token is kept and this
     // runs again on the next launch, so the endpoint shipping is enough.
     return {
