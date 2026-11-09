@@ -28,7 +28,8 @@ import { Platform } from 'react-native';
 import type { ApiClient } from '../api/client';
 import { paths } from '../api/endpoints';
 import { inbox } from './inbox';
-import type { InboxItem } from './types';
+import { matchRecording } from '../capture/record/matchRecording';
+import { isOwnCameraNotice, type InboxItem } from './types';
 
 const TOKEN_KEY = 'riseup.pushToken';
 
@@ -47,12 +48,19 @@ export type PushState =
  * see "analysis complete" for the match they are waiting on.
  */
 Notifications.setNotificationHandler({
-  handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
-    shouldPlaySound: false,
-    shouldSetBadge: true,
-  }),
+  handleNotification: async (notification) => {
+    // The server's copy of this phone's own pause/resume: already shown
+    // locally the moment it happened (recordingNotices.ts).
+    const data = (notification.request.content.data ?? {}) as Record<string, unknown>;
+    const own = matchRecording.getSnapshot();
+    const show = !isOwnCameraNotice(data, { sessionId: own.sessionId, role: own.role });
+    return {
+      shouldShowBanner: show,
+      shouldShowList: show,
+      shouldPlaySound: false,
+      shouldSetBadge: show,
+    };
+  },
 });
 
 /**
