@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["RiseupRecorderModule"]
+  },
+  "android": {
+    "modules": ["co.riseupai.mobile.recorder.RiseupRecorderModule"]
+  }
+}

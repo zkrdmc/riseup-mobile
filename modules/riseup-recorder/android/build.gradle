@@ -1,0 +1,33 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'co.riseupai.mobile.recorder'
+version = '0.1.0'
+
+android {
+  namespace "co.riseupai.mobile.recorder"
+  defaultConfig {
+    versionCode 1
+    versionName "0.1.0"
+  }
+  lintOptions {
+    abortOnError false
+  }
+}
+
+repositories {
+  mavenCentral()
+}
+
+// Recording needs nothing beyond the platform: Camera2, MediaCodec and
+// MediaMuxer are all android.*. A camera library on top would own the encoder,
+// and owning the encoder is the whole point (see SegmentRecorder.kt).
+//
+// Uploads run under WorkManager (ChunkUploadWorker.kt), so they survive the
+// app going to the background. Pinned exactly.
+dependencies {
+  implementation 'androidx.work:work-runtime-ktx:2.10.0'
+  implementation 'androidx.core:core-ktx:1.13.1'
+}

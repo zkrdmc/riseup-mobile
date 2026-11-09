@@ -21,6 +21,17 @@ export type NotificationCategory =
   | 'upload_stalled'
   | 'quota_warning'
   /**
+   * A camera of a casing rig paused (pulled from its casing, the app left,
+   * the phone moved), resumed, both paused (the halftime window opened), or
+   * the match ended because nobody resumed within it (Zak, 9 Nov 2026). Sent
+   * by the server to the club's devices; the phone that paused already showed
+   * its own notice and drops the server's copy (`isOwnCameraNotice`).
+   */
+  | 'camera_paused'
+  | 'camera_resumed'
+  | 'match_halftime'
+  | 'match_ended'
+  /**
    * A fixture is about to kick off.
    *
    * THE ONLY CATEGORY THAT IS NOT SENT BY THE SERVER. A fixture's kickoff is a
@@ -98,6 +109,34 @@ export const CATEGORIES: readonly CategorySpec[] = [
     canDisable: true,
   },
   {
+    category: 'camera_paused',
+    title: 'Camera paused',
+    description: 'A phone of the rig stopped recording during a match: check its casing.',
+    priority: 'high',
+    canDisable: true,
+  },
+  {
+    category: 'camera_resumed',
+    title: 'Camera recording again',
+    description: 'A paused phone of the rig is recording again.',
+    priority: 'normal',
+    canDisable: true,
+  },
+  {
+    category: 'match_halftime',
+    title: 'Both cameras paused',
+    description: 'Every phone of the rig paused; the match stays open for 15 minutes.',
+    priority: 'normal',
+    canDisable: true,
+  },
+  {
+    category: 'match_ended',
+    title: 'Match ended',
+    description: 'Nobody resumed within 15 minutes, so the match was closed and sent.',
+    priority: 'high',
+    canDisable: true,
+  },
+  {
     category: 'quota_warning',
     title: 'Quota warning',
     description: 'Your club is close to its processing limit.',
@@ -105,6 +144,22 @@ export const CATEGORIES: readonly CategorySpec[] = [
     canDisable: true,
   },
 ];
+
+/**
+ * A server push about THIS phone's own camera in the match it is recording:
+ * the phone already showed its own notice the moment it paused, so the
+ * server's copy would be a duplicate. Everyone else's devices show it.
+ */
+export function isOwnCameraNotice(
+  data: Record<string, unknown>,
+  own: { sessionId: string | null; role: string },
+): boolean {
+  const category = data.category;
+  if (category !== 'camera_paused' && category !== 'camera_resumed') {
+    return false;
+  }
+  return own.sessionId !== null && data.session_id === own.sessionId && data.role === own.role;
+}
 
 /**
  * Where a notification goes when tapped.
@@ -120,6 +175,12 @@ export function routeFor(
   const jobId = typeof data.job_id === 'string' ? data.job_id : null;
 
   switch (category as NotificationCategory) {
+    case 'camera_paused':
+    case 'camera_resumed':
+    case 'match_halftime':
+    case 'match_ended':
+      return { pathname: '/record' };
+
     case 'analysis_complete':
       return matchId === null ? { pathname: '/' } : { pathname: '/match/[id]', params: { id: matchId } };
 

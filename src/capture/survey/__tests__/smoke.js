@@ -21,6 +21,9 @@ const chunks = require('../../../../.smoke/capture/upload/chunkManifest');
 const chunksync = require('../../../../.smoke/capture/devices/merge');
 const solve = require('../../../../.smoke/capture/calibration/solve');
 const marker = require('../../../../.smoke/capture/sync/marker');
+const rq = require('../../../../.smoke/capture/record/recordingQueue');
+const mr = require('../../../../.smoke/capture/record/motionRule');
+const pr = require('../../../../.smoke/capture/record/pairing');
 
 let pass = 0;
 let fail = 0;
@@ -1312,6 +1315,75 @@ console.log('26. A call that never answers must not spin forever');
         isTimeoutError(new Error('nope')) === false);
   check('the error carries what it was waiting on, for the caller to read',
         new TimeoutError('Signing in', 15000).what === 'Signing in');
+}
+
+/* ── Recorded chunk queue (src/capture/record/recordingQueue.ts) ───────── */
+{
+  const chunk = (sequence, status, nextAttemptAt = 0) => ({
+    manifest: { sequence }, uri: `file:///s${sequence}.mp4`, status, attempts: 0, nextAttemptAt, error: null,
+  });
+  check('the oldest unconfirmed chunk goes first',
+        rq.nextChunkToSend([chunk(2, 'pending'), chunk(0, 'confirmed'), chunk(1, 'pending')], 10).manifest.sequence === 1);
+  check('a chunk backing off is skipped for one that is due',
+        rq.nextChunkToSend([chunk(1, 'pending', 99), chunk(2, 'pending', 0)], 10).manifest.sequence === 2);
+  check('only chunks backing off means wait',
+        rq.nextChunkToSend([chunk(1, 'pending', 99)], 10) === 'wait');
+  check('everything confirmed means nothing to send',
+        rq.nextChunkToSend([chunk(0, 'confirmed')], 10) === null);
+  check('a handed-over chunk is the OS uploader\'s, not sent again',
+        rq.nextChunkToSend([{ ...chunk(0, 'pending'), status: 'handed' }], 10) === null);
+  const ladder = { rungs: rq.HEVC_LADDER.length, segmentSeconds: 60 };
+  check('the HEVC ladder runs 12 down to 4 Mbit/s',
+        rq.HEVC_LADDER[0] === 12e6 && rq.HEVC_LADDER[rq.HEVC_LADDER.length - 1] === 4e6);
+  check('the H.264 ladder is the same x1.6',
+        rq.H264_LADDER[0] === 19.2e6 && rq.H264_LADDER[rq.H264_LADDER.length - 1] === 6.4e6);
+  check('more than a segment behind steps down one rung',
+        rq.nextRung({ ...ladder, rung: 0, backlogSeconds: 90, fastInARow: 0 }) === 1);
+  check('the floor is the floor',
+        rq.nextRung({ ...ladder, rung: 4, backlogSeconds: 300, fastInARow: 0 }) === 4);
+  check('three fast segments with nothing waiting step back up',
+        rq.nextRung({ ...ladder, rung: 2, backlogSeconds: 0, fastInARow: 3 }) === 1);
+  check('keeping pace changes nothing',
+        rq.nextRung({ ...ladder, rung: 2, backlogSeconds: 30, fastInARow: 1 }) === 2);
+  const span = (s, e, st = 'pending') => ({ manifest: { sequence: 0, startPtsNs: s, endPtsNs: e }, status: st });
+  check('the backlog is the unconfirmed seconds',
+        rq.backlogSeconds([span(0, 60e9, 'confirmed'), span(60e9, 120e9, 'handed'), span(120e9, 150e9)]) === 90);
+  check('a join declares no gap', rq.gapBeforeMs(60e9, 60e9 + 1e6) === 0);
+  check('a pause declares its length', rq.gapBeforeMs(60e9, 75.5e9) === 15500);
+  check('the first chunk declares nothing', rq.gapBeforeMs(null, 3e9) === 0);
+  // Motion: sustained, not peaks.
+  const series = (from, to, mag) => {
+    const out = [];
+    for (let t = from; t <= to; t += 100) out.push({ t, magnitude: mag });
+    return out;
+  };
+  check('a jolt never pauses',
+        mr.motionVerdict([...series(0, 1000, 0.1), ...series(1100, 1300, 5)], 1300, 'still') === 'still');
+  check('carried for 2 s pauses',
+        mr.motionVerdict(series(0, 2100, 2.5), 2100, 'still') === 'moving');
+  // A gait: swings between ~0.2 and ~2.5 m/s^2 with every step.
+  const gait = [];
+  for (let t = 0; t <= 2100; t += 100) gait.push({ t, magnitude: (t / 100) % 3 === 0 ? 0.2 : 2.0 });
+  check('walking with the phone pauses (the swing between steps no longer resets it)',
+        mr.motionVerdict(gait, 2100, 'still') === 'moving');
+  check('a ball on the pole (0.3 s, hard) does not pause',
+        mr.motionVerdict([...series(0, 1700, 0.05), ...series(1800, 2100, 6)], 2100, 'still') === 'still');
+  check('still for 5 s resumes', mr.motionVerdict(series(0, 5200, 0.1), 5200, 'moving') === 'still');
+  check('half still keeps it paused',
+        mr.motionVerdict([...series(0, 2500, 0.1), ...series(2600, 5200, 1.0)], 5200, 'moving') === 'moving');
+  // Pairing (QR on phone A, scanned by phone B).
+  const sid = 'ses_' + '0123456789abcdef'.repeat(2);
+  const parsed = pr.parseJoinCode(pr.joinCodeFor(sid));
+  check('a join code round-trips', parsed !== null && parsed.sessionId === sid && parsed.role === 'B');
+  check('any other QR is not a join code', pr.parseJoinCode('https://example.com/?session=' + sid) === null);
+  check('a malformed session id is refused',
+        pr.parseJoinCode('riseup://join?v=1&session=ses_nothex&role=B') === null);
+  check('an unknown code version is refused',
+        pr.parseJoinCode(pr.joinCodeFor(sid).replace('v=1', 'v=2')) === null);
+  check('phone B starts as far into the session as it joined',
+        pr.joinOffsetNs('2026-11-09T10:00:00.000Z', Date.parse('2026-11-09T10:01:30.000Z')) === 90e9);
+  check('retry backoff starts at 2 s and stops at 60 s',
+        rq.backoffMs(1) === 2000 && rq.backoffMs(2) === 4000 && rq.backoffMs(20) === 60000);
 }
 
 Promise.all(pending).then(() => {

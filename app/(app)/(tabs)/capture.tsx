@@ -1,10 +1,8 @@
 /**
  * Capture — the Operator's home (§2).
  *
- * WHAT THIS SCREEN IS NOW. The rig survey and the camera library, both of which
- * are finished and both of which are the work that has to happen before a
- * camera films anything useful. Recording itself lands in v0.2; the setup that
- * makes recording worth doing is here today.
+ * WHAT THIS SCREEN IS NOW. The rig survey, the camera library, and recording a
+ * match on this phone (`app/(app)/record.tsx`).
  *
  * WHY IT IS NOT A "COMING SOON" SCREEN. Apple rejects placeholder content under
  * App Review 2.1 and treats a tab that only announces future features as
@@ -143,11 +141,13 @@ export default function CaptureScreen() {
         <Label>Filming</Label>
         <Spacer size={space[2]} />
         <Body tone={3} size={13}>
-          RiseUp does not record video itself yet — film on your own camera and upload it. The
-          survey you do here is what lets those files be measured properly, and it does not have to
-          be repeated when recording arrives.
+          Film the match on this phone, held sideways on a tripod: it goes up a minute at a time
+          while you play, so the analysis starts before the final whistle. Footage from another
+          camera can be uploaded instead.
         </Body>
         <Spacer size={space[3]} />
+        <Button label="Record a match" onPress={() => router.push('/record')} />
+        <Spacer size={space[2]} />
         <Button
           label="Upload footage"
           onPress={() => router.push('/uploads')}
