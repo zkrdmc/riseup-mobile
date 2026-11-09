@@ -140,11 +140,23 @@ export interface UploadEntry {
    * waits rather than asking again at once. `busyRetries` sets the backoff.
    */
   retryAt?: number;
+  /** A single PUT landed in storage: a retry only confirms, never re-sends. */
+  putDone?: boolean;
   busyRetries?: number;
 }
 
 /** The club's one slot was taken: wait 30 s, doubling, at most 10 min. */
 const busyBackoffMs = (n: number) => Math.min(30_000 * 2 ** n, 10 * 60_000);
+
+/**
+ * The server's busy-club 409 (riseup-backend `videos.py::_refuse_if_busy`),
+ * told apart from the confirm's verdicts on the bytes by its detail, the only
+ * thing that distinguishes them on the wire. Matched loosely so a rewording
+ * that keeps the phrase still reads as busy.
+ */
+function isBusyClubRefusal(error: ApiError): boolean {
+  return typeof error.detail === 'string' && /still being processed/i.test(error.detail);
+}
 
 type Listener = () => void;
 
@@ -289,6 +301,9 @@ class UploadManager {
       status: 'queued',
       error: null,
       retryAt: undefined,
+      // A person's retry after a final refusal sends the bytes again; only
+      // the automatic busy-club retry confirms what already landed.
+      putDone: undefined,
       uploadedBytes: entry?.multipart ? entry.uploadedBytes : 0,
     });
     void this.drain();
@@ -374,6 +389,20 @@ class UploadManager {
 
     this.update(id, { status: 'uploading', error: null });
     const startedAt = Date.now();
+
+    // The bytes already landed (a busy club refused the confirm): confirm only.
+    if (entry.putDone && entry.jobId && !entry.multipart) {
+      try {
+        this.update(id, { status: 'confirming', uploadedBytes: entry.totalBytes });
+        await api.post(paths.uploadConfirm(entry.jobId), undefined, {
+          idempotencyKey: `${entry.idempotencyKey}:confirm`,
+        });
+        this.update(id, { status: 'uploaded', busyRetries: 0 });
+      } catch (error) {
+        this.fail(id, error, undefined, { conflictIsBusy: false });
+      }
+      return;
+    }
 
     // A multipart upload this entry already started: carry on from it.
     if (entry.multipart && entry.jobId) {
@@ -480,7 +509,7 @@ class UploadManager {
         return;
       }
 
-      this.update(id, { status: 'confirming', uploadedBytes: entry.totalBytes });
+      this.update(id, { status: 'confirming', uploadedBytes: entry.totalBytes, putDone: true });
 
       // Separate call rather than a storage webhook: a webhook arrives with no
       // Clerk token and the API has no other way to know whose object it is.
@@ -707,7 +736,11 @@ class UploadManager {
 
   private fail(id: string, error: unknown, fallback?: string,
                { conflictIsBusy = true }: { conflictIsBusy?: boolean } = {}): void {
-    if (conflictIsBusy && error instanceof ApiError && error.code === 'conflict') {
+    // The confirm answers 409 for a busy club TOO (`_refuse_if_busy`), and that
+    // one must wait, not fail: an overnight upload whose parts finish while
+    // another match runs would otherwise be lost to the 6 h / 23 h sweeps.
+    if (error instanceof ApiError && error.code === 'conflict'
+        && (conflictIsBusy || isBusyClubRefusal(error))) {
       // Another job is already running for this club. Not a failure — put it
       // back in the queue, and the drain loop asks again after a backoff
       // rather than at once (it would loop for as long as the app is open).
