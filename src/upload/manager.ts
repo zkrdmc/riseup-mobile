@@ -135,7 +135,16 @@ export interface UploadEntry {
   multipart?: MultipartState;
   /** The file's modification time, part of its fingerprint. */
   modifiedMs?: number | null;
+  /**
+   * Not before this (epoch ms): the club's slot was busy, and the drain loop
+   * waits rather than asking again at once. `busyRetries` sets the backoff.
+   */
+  retryAt?: number;
+  busyRetries?: number;
 }
+
+/** The club's one slot was taken: wait 30 s, doubling, at most 10 min. */
+const busyBackoffMs = (n: number) => Math.min(30_000 * 2 ** n, 10 * 60_000);
 
 type Listener = () => void;
 
@@ -275,9 +284,11 @@ class UploadManager {
   retry(id: string): void {
     const entry = this.entries.find((e) => e.id === id);
     // A multipart entry keeps what landed; only a single PUT starts over.
+    // A person's retry goes now, whatever backoff was pending.
     this.update(id, {
       status: 'queued',
       error: null,
+      retryAt: undefined,
       uploadedBytes: entry?.multipart ? entry.uploadedBytes : 0,
     });
     void this.drain();
@@ -311,8 +322,22 @@ class UploadManager {
     this.draining = true;
     try {
       for (;;) {
-        const next = this.entries.find((e) => e.status === 'queued');
+        const now = Date.now();
+        const queued = this.entries.filter((e) => e.status === 'queued');
+        const next = queued.find((e) => (e.retryAt ?? 0) <= now);
         if (next === undefined) {
+          // Everything left is waiting out a busy club: come back for the
+          // first of them, not in a tight loop.
+          const waits = queued.map((e) => (e.retryAt ?? now) - now);
+          if (waits.length > 0) {
+            if (this.wake !== null) {
+              clearTimeout(this.wake);
+            }
+            this.wake = setTimeout(() => {
+              this.wake = null;
+              void this.drain();
+            }, Math.max(1000, Math.min(...waits)));
+          }
           return;
         }
         await this.run(next.id);
@@ -321,6 +346,8 @@ class UploadManager {
       this.draining = false;
     }
   }
+
+  private wake: ReturnType<typeof setTimeout> | null = null;
 
   private async run(id: string): Promise<void> {
     const api = this.api;
@@ -461,10 +488,12 @@ class UploadManager {
         idempotencyKey: `${entry.idempotencyKey}:confirm`,
       });
 
-      this.update(id, { status: 'uploaded' });
+      this.update(id, { status: 'uploaded', busyRetries: 0 });
     } catch (error) {
       this.activeTask = null;
-      this.fail(id, error);
+      // Past the mint, a 409 is the confirm's verdict on these bytes, not a
+      // busy club: waiting and asking again gets the same answer.
+      this.fail(id, error, undefined, { conflictIsBusy: false });
     }
   }
 
@@ -484,6 +513,11 @@ class UploadManager {
       return;
     }
     const startedAt = Date.now();
+    // Once the confirm has gone out -- or the server may already hold a
+    // confirmed match we cannot see -- a failure here must NOT be reported:
+    // `upload-failed` would fail a match that is queued, and the next retry
+    // would send the whole file again as a new job.
+    let mayBeConfirmed = false;
     const heartbeat = setInterval(() => {
       const now = this.entries.find((e) => e.id === id);
       void api
@@ -517,12 +551,13 @@ class UploadManager {
           // killed before recording that -- then the job is past
           // `awaiting_upload` and nothing must be sent again -- or the
           // server discarded it after a day, and it starts over cleanly.
+          // A network error here is NOT "start over": that would throw away a
+          // resumable upload. It throws, the entry pauses, a retry asks again.
+          mayBeConfirmed = true;
           const status = await api
-            .get<{ state?: string; stage?: string }>(paths.job(jobId), { noCache: true })
-            .catch(() => null);
-          if (status !== null && status.state !== 'failed'
-              && status.stage !== 'awaiting_upload') {
-            this.update(id, { status: 'uploaded', uploadedBytes: total() });
+            .get<{ state?: string; stage?: string }>(paths.job(jobId), { noCache: true });
+          if (status.state !== 'failed' && status.stage !== 'awaiting_upload') {
+            this.update(id, { status: 'uploaded', uploadedBytes: total(), busyRetries: 0 });
             return;
           }
           this.update(id, { multipart: undefined, jobId: null, uploadedBytes: 0,
@@ -615,23 +650,30 @@ class UploadManager {
       const parts = Object.entries(state()!.parts)
         .map(([n, etag]) => ({ part_number: Number(n), etag }))
         .sort((a, b) => a.part_number - b.part_number);
+      mayBeConfirmed = true;
       await api.post(paths.uploadConfirm(jobId), { parts }, {
         idempotencyKey: `${this.entries.find((e) => e.id === id)?.idempotencyKey}:confirm`,
         // Assembly of a few hundred parts plus a HEAD: more than 15 s.
         timeoutMs: 120_000,
       });
-      this.update(id, { status: 'uploaded' });
+      this.update(id, { status: 'uploaded', busyRetries: 0 });
     } catch (error) {
       // PAUSED, NOT LOST. The server is told so it frees the club's slot and
       // the pod; it keeps the parts, and so does the ledger. Retry resumes.
-      void api
-        .post(paths.uploadFailed(jobId), {
-          reason: error instanceof Error ? error.message.slice(0, 200) : 'stopped',
-          stage: 'parts',
-          progress: this.fraction(id),
-        })
-        .catch(() => undefined);
-      this.fail(id, error, 'The upload paused. Tap retry to carry on where it stopped.');
+      // Not told once the confirm may have landed (see `mayBeConfirmed`).
+      if (!mayBeConfirmed) {
+        void api
+          .post(paths.uploadFailed(jobId), {
+            reason: error instanceof Error ? error.message.slice(0, 200) : 'stopped',
+            stage: 'parts',
+            progress: this.fraction(id),
+          })
+          .catch(() => undefined);
+      }
+      // A 409 before the confirm is a busy club (upload-parts on a resume);
+      // from the confirm it is the server's verdict on the parts, final.
+      this.fail(id, error, 'The upload paused. Tap retry to carry on where it stopped.',
+                { conflictIsBusy: !mayBeConfirmed });
     } finally {
       clearInterval(heartbeat);
     }
@@ -663,12 +705,19 @@ class UploadManager {
     return entry && entry.totalBytes > 0 ? entry.uploadedBytes / entry.totalBytes : 0;
   }
 
-  private fail(id: string, error: unknown, fallback?: string): void {
-    if (error instanceof ApiError && error.code === 'conflict') {
+  private fail(id: string, error: unknown, fallback?: string,
+               { conflictIsBusy = true }: { conflictIsBusy?: boolean } = {}): void {
+    if (conflictIsBusy && error instanceof ApiError && error.code === 'conflict') {
       // Another job is already running for this club. Not a failure — put it
-      // back in the queue and let the drain loop pick it up after the other
-      // one finishes.
-      this.update(id, { status: 'queued', error: null });
+      // back in the queue, and the drain loop asks again after a backoff
+      // rather than at once (it would loop for as long as the app is open).
+      const n = this.entries.find((e) => e.id === id)?.busyRetries ?? 0;
+      this.update(id, {
+        status: 'queued',
+        error: null,
+        retryAt: Date.now() + busyBackoffMs(n),
+        busyRetries: n + 1,
+      });
       return;
     }
     this.update(id, {
