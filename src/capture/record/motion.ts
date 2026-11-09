@@ -4,16 +4,15 @@
  * A phone in a casing on a tripod is nearly still: wind and a ball hitting
  * the pole move it in short jolts. A phone taken out and carried moves
  * continuously. So the signal is SUSTAINED user acceleration (gravity
- * removed), not a peak: above MOVED_MS2 for MOVED_FOR_MS pauses, below
- * STILL_MS2 for STILL_FOR_MS resumes a motion pause.
+ * removed) over a window, not a peak: see motionRule.ts.
  *
- * THE THRESHOLDS ARE A FIRST GUESS, not measured on a casing. They are
- * constants here so the first real casing session can set them.
+ * THE THRESHOLDS ARE A FIRST GUESS (revised once, motionRule.ts), not yet
+ * measured on a casing. Dev builds log the RMS so a casing session can set them.
  */
 
 import { DeviceMotion } from 'expo-sensors';
 
-import { motionVerdict, type MotionSample } from './motionRule';
+import { motionVerdict, rms, type MotionSample } from './motionRule';
 
 export interface MotionWatch {
   stop(): void;
@@ -25,6 +24,7 @@ export function startMotionWatch(handlers: {
 }): MotionWatch {
   const recent: MotionSample[] = [];
   let state: 'still' | 'moving' = 'still';
+  let lastLog = 0;
   DeviceMotion.setUpdateInterval(100);
   const sub = DeviceMotion.addListener((m) => {
     const a = m.acceleration;
@@ -35,6 +35,12 @@ export function startMotionWatch(handlers: {
     recent.push({ t: now, magnitude: Math.hypot(a.x, a.y, a.z) });
     while (recent.length > 0 && now - recent[0]!.t > 6000) {
       recent.shift();
+    }
+    // Dev builds log the 2 s RMS once a second, so a session in a real casing
+    // (wind, a ball on the pole, a carried phone) can set the thresholds.
+    if (__DEV__ && now - lastLog >= 1000) {
+      lastLog = now;
+      console.log(`[motion] rms2s=${rms(recent.filter((x) => now - x.t <= 2000)).toFixed(2)} state=${state}`);
     }
     const verdict = motionVerdict(recent, now, state);
     if (verdict !== state) {

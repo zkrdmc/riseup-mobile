@@ -48,6 +48,7 @@ import {
 } from '../upload/chunkedSession';
 import { joinOffsetNs, type JoinCode } from './pairing';
 import { startMotionWatch, type MotionWatch } from './motion';
+import { prepareRecordingNotices, recordingNotices } from './recordingNotices';
 import {
   backlogSeconds,
   backoffMs,
@@ -59,6 +60,8 @@ import {
 } from './recordingQueue';
 
 const STATE_KEY = 'riseup.matchRecording.v2';
+/** Unsent video, in seconds, past which the coach is told the upload is behind. */
+const BEHIND_WARN_S = 180;
 const DEVICE_KEY = 'riseup.deviceId';
 
 /**
@@ -140,6 +143,7 @@ class MatchRecording {
   private hydrated = false;
   private motion: MotionWatch | null = null;
   private poll: ReturnType<typeof setInterval> | null = null;
+  private warnedBehind = false;
 
   subscribe = (l: Listener): (() => void) => {
     this.listeners.add(l);
@@ -272,6 +276,7 @@ class MatchRecording {
   private async startRecorder(sequenceStart: number, ptsOffsetNs: number): Promise<void> {
     const recorder = getRiseupRecorder()!;
     const { sessionId, chunkTargetSeconds } = this.state;
+    prepareRecordingNotices();
     const dir = new Directory(Paths.document, 'recordings', sessionId!);
     dir.create({ intermediates: true, idempotent: true });
     try {
@@ -310,6 +315,7 @@ class MatchRecording {
     this.motion = null;
     this.set({ phase: 'finishing', endedAt: new Date().toISOString() });
     await getRiseupRecorder()?.stop();
+    void recordingNotices.stopped(this.state.role);
     void this.pump();
   }
 
@@ -332,6 +338,7 @@ class MatchRecording {
     }
     getRiseupRecorder()?.pause(reason);
     this.set({ phase: 'paused', pauseReason: reason });
+    void recordingNotices.paused(this.state.role, reason);
     void this.tellServer('pause', reason);
   }
 
@@ -341,6 +348,7 @@ class MatchRecording {
     }
     getRiseupRecorder()?.resume();
     this.set({ phase: 'recording', pauseReason: null });
+    void recordingNotices.resumed(this.state.role);
     void this.tellServer('resume');
   }
 
@@ -553,6 +561,14 @@ class MatchRecording {
     if (rung !== this.state.rung) {
       getRiseupRecorder()?.setBitRate(rungs[rung]!);
     }
+    // Told once each time the backlog crosses three minutes, not every chunk.
+    const behind = backlogSeconds(this.state.chunks);
+    if (behind > BEHIND_WARN_S && !this.warnedBehind) {
+      this.warnedBehind = true;
+      void recordingNotices.behind(Math.round(behind / 60));
+    } else if (behind < BEHIND_WARN_S / 2) {
+      this.warnedBehind = false;
+    }
     this.set({ rung, fastInARow: rung < this.state.rung ? 0 : fastInARow });
   }
 
@@ -579,8 +595,9 @@ class MatchRecording {
         this.confirmed(sessionId, chunk);
       }
     }
-    if (server.autoCompleted) {
+    if (server.autoCompleted && this.state.phase !== 'completed') {
       this.set({ phase: 'completed', jobId: server.jobId ?? null, error: null });
+      void recordingNotices.sent();
     }
   }
 
@@ -606,6 +623,7 @@ class MatchRecording {
         { endedAt: endedAt ?? new Date().toISOString() });
       if (remote?.reassemblable) {
         this.set({ phase: 'completed', jobId: remote.jobId, error: null });
+        void recordingNotices.sent();
       } else {
         const problems = remote?.problems.map((p) => p.message) ?? local.problems.map((p) => p.message);
         this.set({ phase: 'failed', error: problems.join(' ') || 'The match could not be assembled.' });

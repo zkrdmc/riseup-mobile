@@ -1359,8 +1359,15 @@ console.log('26. A call that never answers must not spin forever');
   };
   check('a jolt never pauses',
         mr.motionVerdict([...series(0, 1000, 0.1), ...series(1100, 1300, 5)], 1300, 'still') === 'still');
-  check('carried for 1.5 s pauses',
-        mr.motionVerdict(series(0, 1600, 2.5), 1600, 'still') === 'moving');
+  check('carried for 2 s pauses',
+        mr.motionVerdict(series(0, 2100, 2.5), 2100, 'still') === 'moving');
+  // A gait: swings between ~0.2 and ~2.5 m/s^2 with every step.
+  const gait = [];
+  for (let t = 0; t <= 2100; t += 100) gait.push({ t, magnitude: (t / 100) % 3 === 0 ? 0.2 : 2.0 });
+  check('walking with the phone pauses (the swing between steps no longer resets it)',
+        mr.motionVerdict(gait, 2100, 'still') === 'moving');
+  check('a ball on the pole (0.3 s, hard) does not pause',
+        mr.motionVerdict([...series(0, 1700, 0.05), ...series(1800, 2100, 6)], 2100, 'still') === 'still');
   check('still for 5 s resumes', mr.motionVerdict(series(0, 5200, 0.1), 5200, 'moving') === 'still');
   check('half still keeps it paused',
         mr.motionVerdict([...series(0, 2500, 0.1), ...series(2600, 5200, 1.0)], 5200, 'moving') === 'moving');
